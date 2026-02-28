@@ -11,6 +11,7 @@ const config: Phaser.Types.Core.GameConfig = {
     default: "arcade",
     arcade: { debug: false }
   },
+  // 多场景加载
   scene: [MyGame],
   //加载的phaser放到id为game的容器里面
   parent: "game"
