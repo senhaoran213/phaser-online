@@ -1,20 +1,10 @@
+// 项目入口：
+// 1. 引入 Phaser 本体
+// 2. 引入我们整理好的游戏配置
+// 3. 引入全局样式，让页面容器能正确显示游戏画布
 import Phaser from "phaser";
-import { MyGame } from "./game";
+import { gameConfig } from "./config/gameConfig";
+import "./style.css";
 
-const config: Phaser.Types.Core.GameConfig = {
-  type: Phaser.AUTO,
-  width: 300,
-  height: 300,
-  backgroundColor: "#eeeeee",
-  pixelArt: true,
-  physics: {
-    default: "arcade",
-    arcade: { debug: false }
-  },
-  // 多场景加载
-  scene: [MyGame],
-  //加载的phaser放到id为game的容器里面
-  parent: "game"
-};
-
-new Phaser.Game(config);
+// 创建 Phaser.Game 之后，Phaser 会自动进入配置里的第一个场景。
+new Phaser.Game(gameConfig);
