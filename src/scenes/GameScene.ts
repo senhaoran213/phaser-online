@@ -306,9 +306,9 @@ export class GameScene extends Phaser.Scene {
     // 如果你感觉“明明没碰到树却被挡住了”，
     // 优先调这两个值：
     // - setSize(width, height)
-    // - setOffset(x, y)
-    this.player.setSize(12, 10);
-    this.player.setOffset(10, 21);
+    // - setOffset(x, y)右，下
+    this.player.setSize(12, 8);
+    this.player.setOffset(2, 13);
 
     // 默认播放站立动画。
     this.player.play("stand");
