@@ -14,6 +14,15 @@ import {
 import { sendSocketMessage } from "../service/network";
 import { createTerrainTileset } from "../render/createTerrainTileset";
 
+function createPlayerId() {
+  if (crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  const randomPart = Math.random().toString(36).slice(2);
+  return `player-${Date.now().toString(36)}-${randomPart}`;
+}
+
 /**
  * GameScene 是当前项目的核心场景。
  *
@@ -55,9 +64,9 @@ export class GameScene extends Phaser.Scene {
   private remotePlayers = new Map<string, Phaser.Physics.Arcade.Sprite>();
 
   /** 每次刷新页面会生成新的本地玩家 ID，用来和其他玩家区分。 */
-  private playerId = crypto.randomUUID();
+  private playerId = createPlayerId();
 
-  /** 玩家名字，进入场景时通过 prompt 获取。 */
+  /** 玩家名字，进入场景时通过页面内输入框获取。 */
   private playerName = "";
 
   /**
@@ -102,8 +111,13 @@ export class GameScene extends Phaser.Scene {
    * 所以地图和碰撞层必须先准备好。
    */
   create() {
-    this.playerName = this.askPlayerName();
+    this.showPlayerNameDialog((name) => {
+      this.playerName = name;
+      this.startGame();
+    });
+  }
 
+  private startGame() {
     // 先创建地图和碰撞层。
     this.createMap();
     // 再注册角色动画。
@@ -125,7 +139,8 @@ export class GameScene extends Phaser.Scene {
       name: this.playerName,
       x: this.player.x,
       y: this.player.y,
-      dir: this.lastDirection
+      dir: this.lastDirection,
+      moving: false
     });
   }
 
@@ -178,11 +193,8 @@ export class GameScene extends Phaser.Scene {
 
     // 动画切换逻辑：
     // - 移动中：播放 walk_方向
-    // - 停下时：播放 stand
-    //
-    // 如果你想实现“往上走，停下后还保持背朝上”，
-    // 就是在这里改，不要去改输入系统或地图碰撞。
-    this.player.play(isMoving ? `walk_${direction}` : "stand", true);
+    // - 停下时：播放最后移动方向对应的静止帧
+    this.player.play(isMoving ? `walk_${direction}` : this.getIdleAnimation(direction), true);
 
     // 只有判断出新的方向后，才更新 lastDirection。
     this.lastDirection = direction;
@@ -192,13 +204,49 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * 获取玩家名字。
-   *
-   * 这里给了一个默认值，避免用户点取消后整个流程中断。
+   * 显示页面内姓名输入框。
+   * iPhone Safari 对页面加载时自动触发的 prompt 支持不稳定，
+   * 用真实 DOM 输入框会更适合手机端。
    */
-  private askPlayerName() {
-    const input = prompt("请输入你的游戏名");
-    return input?.trim() || `玩家-${this.playerId.slice(0, 4)}`;
+  private showPlayerNameDialog(onSubmit: (name: string) => void) {
+    const existingOverlay = document.querySelector(".player-name-overlay");
+    existingOverlay?.remove();
+
+    const overlay = document.createElement("div");
+    overlay.className = "player-name-overlay";
+
+    const panel = document.createElement("form");
+    panel.className = "player-name-panel";
+
+    const title = document.createElement("h1");
+    title.textContent = "输入你的游戏名";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 12;
+    input.placeholder = `玩家-${this.playerId.slice(0, 4)}`;
+    input.autocomplete = "off";
+    input.autocapitalize = "none";
+
+    const button = document.createElement("button");
+    button.type = "submit";
+    button.textContent = "进入游戏";
+
+    panel.append(title, input, button);
+    overlay.append(panel);
+    document.body.append(overlay);
+
+    panel.addEventListener("submit", (event) => {
+      event.preventDefault();
+
+      const name = input.value.trim() || `玩家-${this.playerId.slice(0, 4)}`;
+      overlay.remove();
+      onSubmit(name);
+    });
+
+    window.setTimeout(() => {
+      input.focus();
+    }, 100);
   }
 
   /**
@@ -356,7 +404,7 @@ export class GameScene extends Phaser.Scene {
       // 服务端广播“最终位置”，本地直接瞬移到那个位置。
       // 后面如果想更丝滑，可以改成 tween 或插值。
       remote.setPosition(msg.x, msg.y);
-      remote.play(direction === "stand" ? "stand" : `walk_${direction}`, true);
+      remote.play(msg.moving ? `walk_${direction}` : this.getIdleAnimation(direction), true);
     });
   }
 
@@ -407,6 +455,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * 根据最后朝向选择静止动画。
+   *
+   * Aseprite 里当前静止帧命名是：
+   * - stand：朝下
+   * - back：朝上
+   * - left/right：左右
+   */
+  private getIdleAnimation(direction: string) {
+    if (direction === "up") {
+      return "back";
+    }
+
+    if (direction === "left" || direction === "right") {
+      return direction;
+    }
+
+    return "stand";
+  }
+
+  /**
    * 把本地玩家的位置和方向同步给服务器。
    *
    * 这里做了一个很简单的节流：
@@ -437,7 +505,8 @@ export class GameScene extends Phaser.Scene {
       playerId: this.playerId,
       x: this.player.x,
       y: this.player.y,
-      dir: isMoving ? dir : "stand",
+      dir,
+      moving: isMoving,
       t: now
     });
   }

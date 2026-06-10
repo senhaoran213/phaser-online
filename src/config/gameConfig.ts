@@ -19,7 +19,7 @@ export const gameConfig: Phaser.Types.Core.GameConfig = {
     default: "arcade",
     arcade: {
       // 打开后会显示碰撞框，调试地图碰撞时很有用。
-      debug: true
+      debug: false
     }
   },
   // 当前项目只有一个主场景；以后可以继续加 BootScene、UIScene 等。
