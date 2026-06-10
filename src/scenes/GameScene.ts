@@ -11,7 +11,7 @@ import {
   worldHeight,
   worldWidth
 } from "../maps/emeraldMap";
-import { sendSocketMessage } from "../service/network";
+import { sendSocketMessage,startVoiceChat } from "../service/network";
 import { createTerrainTileset } from "../render/createTerrainTileset";
 
 function createPlayerId() {
@@ -22,6 +22,21 @@ function createPlayerId() {
   const randomPart = Math.random().toString(36).slice(2);
   return `player-${Date.now().toString(36)}-${randomPart}`;
 }
+
+type DirectionKey = "up" | "down" | "left" | "right";
+
+const MOBILE_LAYOUT_STORAGE_KEY = "phaser-online-mobile-layout";
+
+type MobileLayoutSettings = {
+  gameTop: number;
+  controlsBottom: number;
+  dpadX: number;
+  dpadY: number;
+  dpadSize: number;
+  actionsX: number;
+  actionsY: number;
+  actionsSize: number;
+};
 
 /**
  * GameScene 是当前项目的核心场景。
@@ -44,6 +59,20 @@ export class GameScene extends Phaser.Scene {
 
   /** Phaser 提供的方向键输入对象，内部会维护 up/down/left/right 的按下状态。 */
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+
+  /** 手机端虚拟方向键状态。 */
+  private touchInput: Record<DirectionKey, boolean> = {
+    up: false,
+    down: false,
+    left: false,
+    right: false
+  };
+
+  /** 手机端虚拟按键容器。 */
+  private mobileControls?: HTMLElement;
+
+  /** 手机端位置调整面板。 */
+  private mobileSettingsPanel?: HTMLElement;
 
   /**
    * 所有参与碰撞的地图层。
@@ -81,6 +110,9 @@ export class GameScene extends Phaser.Scene {
   /** 上一次向服务器同步位置的时间戳，用来做发包节流。 */
   private lastSyncTime = 0;
 
+  /** 背景音乐实例，避免重复播放。 */
+  private backgroundMusic?: Phaser.Sound.BaseSound;
+
   constructor() {
     // key 是 Phaser 内部识别场景的名字。
     super({ key: "GameScene" });
@@ -96,6 +128,7 @@ export class GameScene extends Phaser.Scene {
     // 这里直接加载 Aseprite 导出的 png + json，
     // Phaser 会自动根据 json 里的信息生成动画帧。
     this.load.aseprite("haruka", "/player/haruka/Sprite-0002.png", "/player/haruka/Sprite-0002.json");
+    this.load.audio("bgm", "/audio/%E3%83%9F%E3%82%B7%E3%83%AD%E3%82%BF%E3%82%A6%E3%83%B3%20.ogg");
   }
 
   /**
@@ -130,6 +163,13 @@ export class GameScene extends Phaser.Scene {
     this.registerCamera();
     // 输入监听也放在创建完成后注册。
     this.registerInput();
+    // 手机端虚拟按键独立于 Phaser canvas，桌面端通过 CSS 隐藏。
+    this.createMobileControls();
+    // Safari 需要用户交互后才能播放音频，姓名提交刚好提供了这个时机。
+    this.playBackgroundMusic();
+
+    // 启动语音聊天功能（如果浏览器支持）未成功
+    // startVoiceChat();
 
     // 初始化完成后，告诉服务器“我加入了游戏”。
     // 这里顺便把出生点和当前方向一起发出去，方便别人立刻看到我。
@@ -170,16 +210,16 @@ export class GameScene extends Phaser.Scene {
 
     // 当前是传统宝可梦式四方向移动：
     // 使用 else-if 保证同一时刻只响应一个方向，不会出现斜着走。
-    if (this.cursors.left?.isDown) {
+    if (this.cursors.left?.isDown || this.touchInput.left) {
       velocityX = -speed;
       direction = "left";
-    } else if (this.cursors.right?.isDown) {
+    } else if (this.cursors.right?.isDown || this.touchInput.right) {
       velocityX = speed;
       direction = "right";
-    } else if (this.cursors.up?.isDown) {
+    } else if (this.cursors.up?.isDown || this.touchInput.up) {
       velocityY = -speed;
       direction = "up";
-    } else if (this.cursors.down?.isDown) {
+    } else if (this.cursors.down?.isDown || this.touchInput.down) {
       velocityY = speed;
       direction = "down";
     }
@@ -439,6 +479,245 @@ export class GameScene extends Phaser.Scene {
    */
   private registerInput() {
     this.cursors = this.input.keyboard!.createCursorKeys();
+  }
+
+  private createMobileControls() {
+    this.mobileControls?.remove();
+    this.mobileSettingsPanel?.remove();
+    this.applyMobileLayoutSettings(this.readMobileLayoutSettings());
+
+    const controls = document.createElement("div");
+    controls.className = "mobile-controls";
+
+    const settingsHotspot = document.createElement("button");
+    settingsHotspot.type = "button";
+    settingsHotspot.className = "mobile-settings-hotspot";
+    settingsHotspot.setAttribute("aria-label", "打开布局设置");
+
+    const settingsHint = document.createElement("div");
+    settingsHint.className = "mobile-settings-hint";
+    settingsHint.textContent = "点这里调整布局";
+
+    const dpad = document.createElement("div");
+    dpad.className = "mobile-dpad";
+
+    const actions = document.createElement("div");
+    actions.className = "mobile-actions";
+
+    dpad.append(
+      this.createControlButton("up", "↑"),
+      this.createControlButton("left", "←"),
+      this.createControlButton("right", "→"),
+      this.createControlButton("down", "↓")
+    );
+
+    actions.append(this.createActionButton("B"), this.createActionButton("A"));
+    controls.append(settingsHotspot, settingsHint, dpad, actions);
+
+    document.body.append(controls);
+    this.mobileControls = controls;
+
+    settingsHotspot.addEventListener("click", () => {
+      this.toggleMobileSettingsPanel();
+    });
+  }
+
+  private createControlButton(direction: DirectionKey, label: string) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `mobile-control-button mobile-control-${direction}`;
+    button.textContent = label;
+    button.setAttribute("aria-label", direction);
+
+    const setPressed = (isPressed: boolean) => {
+      this.touchInput[direction] = isPressed;
+    };
+
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      button.setPointerCapture(event.pointerId);
+      setPressed(true);
+    });
+
+    button.addEventListener("pointerup", () => setPressed(false));
+    button.addEventListener("pointercancel", () => setPressed(false));
+    button.addEventListener("lostpointercapture", () => setPressed(false));
+
+    return button;
+  }
+
+  private createActionButton(label: string) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "mobile-action-button";
+    button.textContent = label;
+    button.setAttribute("aria-label", label);
+    return button;
+  }
+
+  private toggleMobileSettingsPanel() {
+    if (this.mobileSettingsPanel) {
+      this.mobileSettingsPanel.remove();
+      this.mobileSettingsPanel = undefined;
+      return;
+    }
+
+    const settings = this.readMobileLayoutSettings();
+    const panel = document.createElement("div");
+    panel.className = "mobile-settings-panel";
+
+    const title = document.createElement("h2");
+    title.textContent = "调整布局";
+
+    const gameTopSlider = this.createLayoutSlider("游戏画面上下", settings.gameTop, -80, 180, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), gameTop: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const controlsBottomSlider = this.createLayoutSlider("整体按键上下", settings.controlsBottom, 0, 140, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), controlsBottom: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const dpadXSlider = this.createLayoutSlider("方向键框左右", settings.dpadX, -40, 70, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), dpadX: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const dpadYSlider = this.createLayoutSlider("方向键框上下", settings.dpadY, -70, 70, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), dpadY: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const dpadSizeSlider = this.createLayoutSlider("方向键框大小", settings.dpadSize, 132, 188, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), dpadSize: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const actionsXSlider = this.createLayoutSlider("AB键框左右", settings.actionsX, -70, 40, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), actionsX: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const actionsYSlider = this.createLayoutSlider("AB键框上下", settings.actionsY, -70, 70, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), actionsY: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const actionsSizeSlider = this.createLayoutSlider("AB键框大小", settings.actionsSize, 128, 188, (value) => {
+      const nextSettings = { ...this.readMobileLayoutSettings(), actionsSize: value };
+      this.saveMobileLayoutSettings(nextSettings);
+      this.applyMobileLayoutSettings(nextSettings);
+    });
+
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "mobile-settings-close";
+    closeButton.textContent = "完成";
+    closeButton.addEventListener("click", () => {
+      panel.remove();
+      this.mobileSettingsPanel = undefined;
+    });
+
+    panel.append(
+      title,
+      gameTopSlider,
+      controlsBottomSlider,
+      dpadXSlider,
+      dpadYSlider,
+      dpadSizeSlider,
+      actionsXSlider,
+      actionsYSlider,
+      actionsSizeSlider,
+      closeButton
+    );
+    document.body.append(panel);
+    this.mobileSettingsPanel = panel;
+  }
+
+  private createLayoutSlider(
+    labelText: string,
+    value: number,
+    min: number,
+    max: number,
+    onInput: (value: number) => void
+  ) {
+    const label = document.createElement("label");
+    label.className = "mobile-settings-field";
+
+    const text = document.createElement("span");
+    text.textContent = labelText;
+
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = String(min);
+    input.max = String(max);
+    input.value = String(value);
+
+    input.addEventListener("input", () => {
+      onInput(Number(input.value));
+    });
+
+    label.append(text, input);
+    return label;
+  }
+
+  private readMobileLayoutSettings(): MobileLayoutSettings {
+    const defaultSettings = {
+      gameTop: 8,
+      controlsBottom: 22,
+      dpadX: 0,
+      dpadY: 0,
+      dpadSize: 154,
+      actionsX: 0,
+      actionsY: 0,
+      actionsSize: 158
+    };
+
+    const savedSettings = localStorage.getItem(MOBILE_LAYOUT_STORAGE_KEY);
+    if (!savedSettings) {
+      return defaultSettings;
+    }
+
+    try {
+      return { ...defaultSettings, ...JSON.parse(savedSettings) };
+    } catch {
+      return defaultSettings;
+    }
+  }
+
+  private saveMobileLayoutSettings(settings: MobileLayoutSettings) {
+    localStorage.setItem(MOBILE_LAYOUT_STORAGE_KEY, JSON.stringify(settings));
+  }
+
+  private applyMobileLayoutSettings(settings: MobileLayoutSettings) {
+    document.documentElement.style.setProperty("--mobile-game-top", `${settings.gameTop}px`);
+    document.documentElement.style.setProperty("--mobile-controls-bottom", `${settings.controlsBottom}px`);
+    document.documentElement.style.setProperty("--mobile-dpad-x", `${settings.dpadX}px`);
+    document.documentElement.style.setProperty("--mobile-dpad-y", `${settings.dpadY}px`);
+    document.documentElement.style.setProperty("--mobile-dpad-size", `${settings.dpadSize}px`);
+    document.documentElement.style.setProperty("--mobile-actions-x", `${settings.actionsX}px`);
+    document.documentElement.style.setProperty("--mobile-actions-y", `${settings.actionsY}px`);
+    document.documentElement.style.setProperty("--mobile-actions-size", `${settings.actionsSize}px`);
+  }
+
+  private playBackgroundMusic() {
+    if (this.backgroundMusic?.isPlaying) {
+      return;
+    }
+
+    this.backgroundMusic = this.sound.add("bgm", {
+      loop: false,
+      volume: 0.35
+    });
+    this.backgroundMusic.play();
   }
 
   /**
