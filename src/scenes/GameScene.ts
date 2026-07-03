@@ -32,19 +32,6 @@ function createPlayerId() {
   return `player-${Date.now().toString(36)}-${randomPart}`;
 }
 
-const MOBILE_LAYOUT_STORAGE_KEY = "phaser-online-mobile-layout";
-
-type MobileLayoutSettings = {
-  gameTop: number;
-  controlsBottom: number;
-  dpadX: number;
-  dpadY: number;
-  dpadSize: number;
-  actionsX: number;
-  actionsY: number;
-  actionsSize: number;
-};
-
 /**
  * GameScene 是当前项目的核心场景。
  *
@@ -77,9 +64,6 @@ export class GameScene extends Phaser.Scene {
 
   /** 手机端虚拟按键容器。 */
   private mobileControls?: HTMLElement;
-
-  /** 手机端位置调整面板。 */
-  private mobileSettingsPanel?: HTMLElement;
 
   /**
    * 所有参与碰撞的地图层。
@@ -511,43 +495,26 @@ export class GameScene extends Phaser.Scene {
 
   private createMobileControls() {
     this.mobileControls?.remove();
-    this.mobileSettingsPanel?.remove();
-    this.applyMobileLayoutSettings(this.readMobileLayoutSettings());
 
     const controls = document.createElement("div");
     controls.className = "mobile-controls";
 
-    const settingsHotspot = document.createElement("button");
-    settingsHotspot.type = "button";
-    settingsHotspot.className = "mobile-settings-hotspot";
-    settingsHotspot.setAttribute("aria-label", "打开布局设置");
-
-    const settingsHint = document.createElement("div");
-    settingsHint.className = "mobile-settings-hint";
-    settingsHint.textContent = "点这里调整布局";
-
     const dpad = document.createElement("div");
     dpad.className = "mobile-dpad";
+    dpad.append(
+      this.createControlButton("up", ""),
+      this.createControlButton("left", ""),
+      this.createControlButton("right", ""),
+      this.createControlButton("down", "")
+    );
 
     const actions = document.createElement("div");
     actions.className = "mobile-actions";
-
-    dpad.append(
-      this.createControlButton("up", "↑"),
-      this.createControlButton("left", "←"),
-      this.createControlButton("right", "→"),
-      this.createControlButton("down", "↓")
-    );
-
     actions.append(this.createActionButton("B"), this.createActionButton("A"));
-    controls.append(settingsHotspot, settingsHint, dpad, actions);
+    controls.append(dpad, actions);
 
     document.body.append(controls);
     this.mobileControls = controls;
-
-    settingsHotspot.addEventListener("click", () => {
-      this.toggleMobileSettingsPanel();
-    });
   }
 
   private createControlButton(direction: Direction, label: string) {
@@ -569,6 +536,7 @@ export class GameScene extends Phaser.Scene {
 
     button.addEventListener("pointerup", () => setPressed(false));
     button.addEventListener("pointercancel", () => setPressed(false));
+    button.addEventListener("pointerleave", () => setPressed(false));
     button.addEventListener("lostpointercapture", () => setPressed(false));
 
     return button;
@@ -627,159 +595,6 @@ export class GameScene extends Phaser.Scene {
         setButtonState(false);
       }
     });
-  }
-
-  private toggleMobileSettingsPanel() {
-    if (this.mobileSettingsPanel) {
-      this.mobileSettingsPanel.remove();
-      this.mobileSettingsPanel = undefined;
-      return;
-    }
-
-    const settings = this.readMobileLayoutSettings();
-    const panel = document.createElement("div");
-    panel.className = "mobile-settings-panel";
-
-    const title = document.createElement("h2");
-    title.textContent = "调整布局";
-
-    const gameTopSlider = this.createLayoutSlider("游戏画面上下", settings.gameTop, -80, 180, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), gameTop: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const controlsBottomSlider = this.createLayoutSlider("整体按键上下", settings.controlsBottom, 0, 140, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), controlsBottom: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const dpadXSlider = this.createLayoutSlider("方向键框左右", settings.dpadX, -40, 70, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), dpadX: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const dpadYSlider = this.createLayoutSlider("方向键框上下", settings.dpadY, -70, 70, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), dpadY: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const dpadSizeSlider = this.createLayoutSlider("方向键框大小", settings.dpadSize, 132, 188, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), dpadSize: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const actionsXSlider = this.createLayoutSlider("AB键框左右", settings.actionsX, -70, 40, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), actionsX: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const actionsYSlider = this.createLayoutSlider("AB键框上下", settings.actionsY, -70, 70, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), actionsY: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const actionsSizeSlider = this.createLayoutSlider("AB键框大小", settings.actionsSize, 128, 188, (value) => {
-      const nextSettings = { ...this.readMobileLayoutSettings(), actionsSize: value };
-      this.saveMobileLayoutSettings(nextSettings);
-      this.applyMobileLayoutSettings(nextSettings);
-    });
-
-    const closeButton = document.createElement("button");
-    closeButton.type = "button";
-    closeButton.className = "mobile-settings-close";
-    closeButton.textContent = "完成";
-    closeButton.addEventListener("click", () => {
-      panel.remove();
-      this.mobileSettingsPanel = undefined;
-    });
-
-    panel.append(
-      title,
-      gameTopSlider,
-      controlsBottomSlider,
-      dpadXSlider,
-      dpadYSlider,
-      dpadSizeSlider,
-      actionsXSlider,
-      actionsYSlider,
-      actionsSizeSlider,
-      closeButton
-    );
-    document.body.append(panel);
-    this.mobileSettingsPanel = panel;
-  }
-
-  private createLayoutSlider(
-    labelText: string,
-    value: number,
-    min: number,
-    max: number,
-    onInput: (value: number) => void
-  ) {
-    const label = document.createElement("label");
-    label.className = "mobile-settings-field";
-
-    const text = document.createElement("span");
-    text.textContent = labelText;
-
-    const input = document.createElement("input");
-    input.type = "range";
-    input.min = String(min);
-    input.max = String(max);
-    input.value = String(value);
-
-    input.addEventListener("input", () => {
-      onInput(Number(input.value));
-    });
-
-    label.append(text, input);
-    return label;
-  }
-
-  private readMobileLayoutSettings(): MobileLayoutSettings {
-    const defaultSettings = {
-      gameTop: 8,
-      controlsBottom: 22,
-      dpadX: 0,
-      dpadY: 0,
-      dpadSize: 154,
-      actionsX: 0,
-      actionsY: 0,
-      actionsSize: 158
-    };
-
-    const savedSettings = localStorage.getItem(MOBILE_LAYOUT_STORAGE_KEY);
-    if (!savedSettings) {
-      return defaultSettings;
-    }
-
-    try {
-      return { ...defaultSettings, ...JSON.parse(savedSettings) };
-    } catch {
-      return defaultSettings;
-    }
-  }
-
-  private saveMobileLayoutSettings(settings: MobileLayoutSettings) {
-    localStorage.setItem(MOBILE_LAYOUT_STORAGE_KEY, JSON.stringify(settings));
-  }
-
-  private applyMobileLayoutSettings(settings: MobileLayoutSettings) {
-    document.documentElement.style.setProperty("--mobile-game-top", `${settings.gameTop}px`);
-    document.documentElement.style.setProperty("--mobile-controls-bottom", `${settings.controlsBottom}px`);
-    document.documentElement.style.setProperty("--mobile-dpad-x", `${settings.dpadX}px`);
-    document.documentElement.style.setProperty("--mobile-dpad-y", `${settings.dpadY}px`);
-    document.documentElement.style.setProperty("--mobile-dpad-size", `${settings.dpadSize}px`);
-    document.documentElement.style.setProperty("--mobile-actions-x", `${settings.actionsX}px`);
-    document.documentElement.style.setProperty("--mobile-actions-y", `${settings.actionsY}px`);
-    document.documentElement.style.setProperty("--mobile-actions-size", `${settings.actionsSize}px`);
   }
 
   private playBackgroundMusic() {

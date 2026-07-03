@@ -1,21 +1,22 @@
-/* 页面层面的样式，不是游戏地图内部的样式。 */
+html,
 body {
   margin: 0;
   min-height: 100vh;
   min-height: 100dvh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* 网页外围背景设成纯黑。 */
-  background:#000;
-  font-family: "Trebuchet MS", "Verdana", sans-serif;
+  background: #000;
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
 }
 
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Trebuchet MS", "Verdana", sans-serif;
+}
+
 #game {
-  /* #game 是 Phaser 挂载 canvas 的容器。 */
   padding: 20px;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.2);
@@ -25,7 +26,6 @@ body {
 }
 
 canvas {
-  /* pixelated 可以保持像素风边缘清晰。 */
   display: block;
   box-sizing: border-box;
   border: 6px solid #000000;
@@ -39,20 +39,20 @@ canvas {
 
 .voice-chat-button {
   position: fixed;
-  top: 18px;
-  right: 18px;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
   z-index: 7;
-  min-width: 86px;
-  min-height: 40px;
+  min-width: 72px;
+  min-height: 38px;
   padding: 0 12px;
-  border: 3px solid #070907;
-  border-radius: 8px;
-  color: #172415;
-  background: #f7f2df;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(8, 14, 10, 0.46);
   font: inherit;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
-  box-shadow: 0 5px 0 rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(8px);
   cursor: pointer;
 }
 
@@ -62,13 +62,11 @@ canvas {
 }
 
 .voice-chat-button-active {
-  color: #fff;
-  background: #2f6c34;
+  background: rgba(41, 128, 67, 0.72);
 }
 
 .voice-chat-button:not(:disabled):active {
-  transform: translateY(3px);
-  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.42);
+  transform: scale(0.96);
 }
 
 .player-name-overlay {
@@ -80,8 +78,7 @@ canvas {
   justify-content: center;
   padding: 24px;
   background:
-    linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.7)),
-    radial-gradient(circle at 50% 20%, rgba(87, 180, 90, 0.42), transparent 34%),
+    linear-gradient(rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0.72)),
     #071007;
 }
 
@@ -90,10 +87,10 @@ canvas {
   display: grid;
   gap: 14px;
   padding: 20px;
-  border: 4px solid #111;
+  border: 3px solid #111;
   border-radius: 8px;
   background: #f7f2df;
-  box-shadow: 0 18px 0 rgba(0, 0, 0, 0.38);
+  box-shadow: 0 16px 0 rgba(0, 0, 0, 0.36);
 }
 
 .player-name-panel h1 {
@@ -126,291 +123,188 @@ canvas {
   background: #2f6c34;
 }
 
-@media (max-width: 768px) and (orientation: portrait) {
+@media (hover: none), (pointer: coarse), (max-width: 900px) {
+  html,
   body {
-    align-items: flex-start;
-    justify-content: center;
-    padding-top: max(var(--mobile-game-top, 8px), env(safe-area-inset-top));
-    background:
-      linear-gradient(180deg, #101611 0%, #050605 58%, #0b0d0b 100%);
+    width: 100%;
+    min-width: 100%;
+    height: 100%;
+    min-height: 100%;
+    overscroll-behavior: none;
+    -webkit-touch-callout: none;
+  }
+
+  body {
+    align-items: stretch;
+    justify-content: stretch;
     touch-action: none;
   }
 
   #game {
-    width: 100%;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
     padding: 0;
     border-radius: 0;
-    background: transparent;
+    overflow: hidden;
+    background: #000;
     box-shadow: none;
   }
 
   canvas {
-    width: min(100vw, 480px);
-    height: auto;
-    margin: 0 auto;
-    border-width: 4px;
-    border-radius: 0 0 8px 8px;
+    width: 100vw !important;
+    height: 100vh !important;
+    height: 100dvh !important;
+    border: 0;
+    border-radius: 0;
   }
 
   .mobile-controls {
     position: fixed;
-    left: 0;
-    right: 0;
-    top: 0;
-    bottom: 0;
+    inset: 0;
     z-index: 6;
     display: block;
     pointer-events: none;
   }
 
-  .mobile-settings-hotspot,
   .mobile-dpad,
   .mobile-actions {
     pointer-events: auto;
   }
 
-  .mobile-settings-hotspot {
-    position: fixed;
-    left: 50%;
-    bottom: calc(max(var(--mobile-controls-bottom, 22px), env(safe-area-inset-bottom)) + 76px);
-    width: 86px;
-    height: 64px;
-    transform: translateX(-50%);
-    appearance: none;
-    -webkit-appearance: none;
-    border: 0;
-    background: transparent;
-    touch-action: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  .mobile-settings-hint {
-    position: fixed;
-    left: 50%;
-    bottom: calc(max(var(--mobile-controls-bottom, 22px), env(safe-area-inset-bottom)) + 122px);
-    transform: translateX(-50%);
-    padding: 8px 12px;
-    border: 4px solid #070907;
-    border-radius: 8px;
-    color: #172415;
-    background: #f7f2df;
-    font-size: 14px;
-    font-weight: 700;
-    box-shadow: 0 6px 0 rgba(0, 0, 0, 0.42);
-    animation: mobileHintOut 4s ease forwards;
-    pointer-events: none;
-    white-space: nowrap;
-  }
-
   .mobile-dpad {
-    --mobile-dpad-button-size: calc((var(--mobile-dpad-size, 154px) - 36px) / 3);
+    --dpad-size: clamp(132px, 32vw, 178px);
+    --dpad-key: calc(var(--dpad-size) / 3);
     position: fixed;
-    left: calc(22px + var(--mobile-dpad-x, 0px));
-    bottom: calc(max(var(--mobile-controls-bottom, 22px), env(safe-area-inset-bottom)) + var(--mobile-dpad-y, 0px));
-    width: var(--mobile-dpad-size, 154px);
-    height: var(--mobile-dpad-size, 154px);
-    display: grid;
-    grid-template-columns: repeat(3, var(--mobile-dpad-button-size));
-    grid-template-rows: repeat(3, var(--mobile-dpad-button-size));
-    gap: 5px;
-    padding: 9px;
-    border: 4px solid #070907;
-    border-radius: 8px;
-    background: #f7f2df;
-    box-sizing: border-box;
-    box-shadow: 0 8px 0 rgba(0, 0, 0, 0.42);
-  }
-
-  .mobile-dpad::before,
-  .mobile-actions::before {
-    position: absolute;
-    left: 8px;
-    top: -24px;
-    padding: 2px 6px;
-    border: 3px solid #070907;
-    border-radius: 6px;
-    color: #172415;
-    background: #f7f2df;
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1.1;
-    box-shadow: 0 3px 0 rgba(0, 0, 0, 0.38);
-  }
-
-  .mobile-dpad::before {
-    /* content: "方向键框"; */
-  }
-
-  .mobile-actions::before {
-    /* content: "AB键框"; */
+    left: max(18px, env(safe-area-inset-left));
+    bottom: max(18px, env(safe-area-inset-bottom));
+    width: var(--dpad-size);
+    height: var(--dpad-size);
   }
 
   .mobile-control-button,
   .mobile-action-button {
     appearance: none;
     -webkit-appearance: none;
-    border: 4px solid #070907;
-    color: #172415;
+    position: absolute;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    color: rgba(255, 255, 255, 0.84);
+    background:
+      radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.24), transparent 32%),
+      rgba(18, 24, 20, 0.32);
     font: inherit;
-    font-weight: 700;
+    font-weight: 800;
     line-height: 1;
+    text-align: center;
     touch-action: none;
     -webkit-tap-highlight-color: transparent;
+    backdrop-filter: blur(6px);
     box-shadow:
-      inset 0 2px 0 rgba(255, 255, 255, 0.36),
-      0 5px 0 #070907;
+      inset 0 0 0 1px rgba(0, 0, 0, 0.16),
+      0 8px 22px rgba(0, 0, 0, 0.22);
   }
 
   .mobile-control-button {
-    width: var(--mobile-dpad-button-size);
-    height: var(--mobile-dpad-button-size);
-    border-radius: 6px;
-    background: #ffffff;
-    font-size: 22px;
+    width: var(--dpad-key);
+    height: var(--dpad-key);
+    border-radius: 999px;
+    font-size: 0;
+  }
+
+  .mobile-control-button::before {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    width: 14px;
+    height: 14px;
+    border-top: 3px solid currentColor;
+    border-left: 3px solid currentColor;
+    transform-origin: center;
+  }
+
+  .mobile-control-up {
+    left: var(--dpad-key);
+    top: 0;
+  }
+
+  .mobile-control-up::before {
+    transform: translate(-50%, -36%) rotate(45deg);
+  }
+
+  .mobile-control-left {
+    left: 0;
+    top: var(--dpad-key);
+  }
+
+  .mobile-control-left::before {
+    transform: translate(-36%, -50%) rotate(-45deg);
+  }
+
+  .mobile-control-right {
+    right: 0;
+    top: var(--dpad-key);
+  }
+
+  .mobile-control-right::before {
+    transform: translate(-64%, -50%) rotate(135deg);
+  }
+
+  .mobile-control-down {
+    left: var(--dpad-key);
+    bottom: 0;
+  }
+
+  .mobile-control-down::before {
+    transform: translate(-50%, -64%) rotate(225deg);
+  }
+
+  .mobile-actions {
+    --action-size: clamp(70px, 17vw, 94px);
+    position: fixed;
+    right: max(20px, env(safe-area-inset-right));
+    bottom: max(24px, env(safe-area-inset-bottom));
+    width: calc(var(--action-size) * 2.1);
+    height: calc(var(--action-size) * 1.55);
+  }
+
+  .mobile-action-button {
+    width: var(--action-size);
+    height: var(--action-size);
+    border-radius: 999px;
+    font-size: clamp(18px, 4vw, 24px);
+  }
+
+  .mobile-action-button:first-child {
+    left: 0;
+    bottom: 0;
+  }
+
+  .mobile-action-button:last-child {
+    right: 0;
+    top: 0;
   }
 
   .mobile-control-button:active,
   .mobile-action-button:active {
-    transform: translateY(4px);
-    box-shadow:
-      inset 0 2px 0 rgba(255, 255, 255, 0.22),
-      0 1px 0 #070907;
-  }
-
-  .mobile-control-up {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .mobile-control-left {
-    grid-column: 1;
-    grid-row: 2;
-  }
-
-  .mobile-control-right {
-    grid-column: 3;
-    grid-row: 2;
-  }
-
-  .mobile-control-down {
-    grid-column: 2;
-    grid-row: 3;
-  }
-
-  .mobile-actions {
-    position: fixed;
-    right: calc(22px - var(--mobile-actions-x, 0px));
-    bottom: calc(max(var(--mobile-controls-bottom, 22px), env(safe-area-inset-bottom)) + var(--mobile-actions-y, 0px));
-    width: var(--mobile-actions-size, 158px);
-    height: calc(var(--mobile-actions-size, 158px) * 0.8);
-    padding: 10px;
-    border: 4px solid #070907;
-    border-radius: 8px;
-    background: #f7f2df;
-    box-sizing: border-box;
-    box-shadow: 0 8px 0 rgba(0, 0, 0, 0.42);
-  }
-
-  .mobile-action-button {
-    position: absolute;
-    width: calc(var(--mobile-actions-size, 158px) * 0.38);
-    height: calc(var(--mobile-actions-size, 158px) * 0.38);
-    border-radius: 999px;
-    background: #2f6c34;
-    color: #fff;
-    font-size: 20px;
-  }
-
-  .mobile-action-button:first-child {
-    left: 12px;
-    bottom: 12px;
-  }
-
-  .mobile-action-button:last-child {
-    right: 12px;
-    top: 12px;
-  }
-
-  .mobile-settings-panel {
-    position: fixed;
-    left: 18px;
-    right: 18px;
-    bottom: calc(max(var(--mobile-controls-bottom, 22px), env(safe-area-inset-bottom)) + 176px);
-    max-height: min(58vh, 440px);
-    overflow: auto;
-    z-index: 8;
-    display: grid;
-    gap: 12px;
-    padding: 18px;
-    border: 4px solid #070907;
-    border-radius: 8px;
-    background: #f7f2df;
-    box-shadow: 0 12px 0 rgba(0, 0, 0, 0.45);
-  }
-
-  .mobile-settings-panel h2 {
-    margin: 0;
-    color: #172415;
-    font-size: 20px;
-    line-height: 1.2;
-    text-align: center;
-  }
-
-  .mobile-settings-field {
-    display: grid;
-    gap: 8px;
-    color: #172415;
-    font-size: 15px;
-    font-weight: 700;
-  }
-
-  .mobile-settings-field input {
-    width: 100%;
-    accent-color: #2f6c34;
-  }
-
-  .mobile-settings-close {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 100%;
-    min-height: 46px;
-    border: 4px solid #070907;
-    border-radius: 8px;
-    color: #fff;
-    background: #2f6c34;
-    font: inherit;
-    font-size: 17px;
-    box-shadow: 0 6px 0 rgba(0, 0, 0, 0.42);
-  }
-
-  @keyframes mobileHintOut {
-    0%,
-    68% {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
-
-    100% {
-      opacity: 0;
-      transform: translateX(-50%) translateY(8px);
-      visibility: hidden;
-    }
-  }
-}
-
-@media (max-width: 768px) and (orientation: landscape) {
-  body {
-    align-items: flex-start;
-    padding-top: 8px;
-  }
-
-  .mobile-controls {
-    display: none;
+    transform: scale(0.92);
+    background:
+      radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.38), transparent 34%),
+      rgba(47, 108, 52, 0.58);
   }
 
   .voice-chat-button {
-    top: auto;
-    right: 12px;
-    bottom: 12px;
+    top: max(12px, env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
+    background: rgba(8, 14, 10, 0.34);
+  }
+}
+
+@media (max-width: 560px) {
+  .mobile-dpad {
+    --dpad-size: clamp(126px, 40vw, 156px);
+  }
+
+  .mobile-actions {
+    --action-size: clamp(64px, 20vw, 82px);
   }
 }
