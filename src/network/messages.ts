@@ -20,7 +20,12 @@ export type VoiceSignalMessage = {
   candidate?: RTCIceCandidateInit;
 };
 
-export type GameSocketMessage = PlayerSyncMessage | VoiceSignalMessage;
+export type WorldSyncMessage = {
+  type: "WORLD_SYNC";
+  players: Array<Omit<PlayerSyncMessage, "type">>;
+};
+
+export type GameSocketMessage = PlayerSyncMessage | VoiceSignalMessage | WorldSyncMessage;
 
 // 把服务端传来的方向值限制在客户端认识的范围内。
 // 这样即使服务端传了奇怪字符串，也不会拼出不存在的动画名。
@@ -38,6 +43,19 @@ export function parseSocketMessage(data: string): GameSocketMessage | null {
 
     if (parsed.type === "VOICE_SIGNAL" && typeof parsed.playerId === "string") {
       return parsed as VoiceSignalMessage;
+    }
+
+    if (parsed.type === "WORLD_SYNC" && Array.isArray((parsed as Partial<WorldSyncMessage>).players)) {
+      return {
+        type: "WORLD_SYNC",
+        players: (parsed as Partial<WorldSyncMessage>).players!
+          .filter((player) => typeof player.playerId === "string" && typeof player.x === "number" && typeof player.y === "number")
+          .map((player) => ({
+            ...player,
+            dir: normalizeDirection(player.dir),
+            moving: Boolean(player.moving)
+          }))
+      };
     }
 
     if (

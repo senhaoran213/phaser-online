@@ -101,9 +101,6 @@ export class GameScene extends Phaser.Scene {
   /** 上一次向服务器同步位置的时间戳，用来做发包节流。 */
   private lastSyncTime = 0;
 
-  /** 背景音乐实例，避免重复播放。 */
-  private backgroundMusic?: Phaser.Sound.BaseSound;
-
   /** 页面级语音按钮，必须由用户点击触发麦克风授权。 */
   private voiceButton?: HTMLButtonElement;
 
@@ -167,8 +164,7 @@ export class GameScene extends Phaser.Scene {
     this.createMobileControls();
     // 创建语音开关按钮，点击后再请求麦克风权限。
     this.createVoiceControls();
-    // Safari 需要用户交互后才能播放音频，姓名提交刚好提供了这个时机。
-    this.playBackgroundMusic();
+    // 背景音乐先暂停自动播放，避免影响语音聊天测试。
 
     // 初始化完成后，告诉服务器“我加入了游戏”。
     // 这里顺便把出生点和当前方向一起发出去，方便别人立刻看到我。
@@ -595,18 +591,6 @@ export class GameScene extends Phaser.Scene {
         setButtonState(false);
       }
     });
-  }
-
-  private playBackgroundMusic() {
-    if (this.backgroundMusic?.isPlaying) {
-      return;
-    }
-
-    this.backgroundMusic = this.sound.add("bgm", {
-      loop: false,
-      volume: 0.35
-    });
-    this.backgroundMusic.play();
   }
 
   /**

@@ -11,6 +11,15 @@ export function bindGameSocket(playerId: string, onMove: (msg: PlayerSyncMessage
       return;
     }
 
+    if (msg.type === "WORLD_SYNC") {
+      msg.players.forEach((player) => {
+        if (player.playerId !== playerId) {
+          onMove({ type: "PLAYER_JOIN", ...player });
+        }
+      });
+      return;
+    }
+
     if (msg.type === "VOICE_SIGNAL") {
       void handleWebRTCMessage(msg);
       return;

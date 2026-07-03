@@ -2,7 +2,9 @@ import type { VoiceSignalMessage } from "../network/messages";
 
 // 这个模块一旦被 import，就会立刻创建 WebSocket 连接。
 // 这里默认去连本机 3001 端口的服务端。
-const WS_URL = `ws://${location.hostname}:3001`;
+const WS_URL =
+  import.meta.env.VITE_WS_URL ??
+  (location.protocol === "https:" ? `wss://${location.host}/ws` : `ws://${location.hostname}:3001`);
 export const socket = new WebSocket(WS_URL);
 
 socket.onopen = () => {
@@ -33,15 +35,20 @@ let localPlayerId = "";
 let localStream: MediaStream | null = null;
 let isVoiceEnabled = false;
 let knownRemotePlayerIds: string[] = [];
+let remoteAudioContext: AudioContext | null = null;
 
 const voiceStatusListeners = new Set<VoiceStatusListener>();
 const peerConnections = new Map<string, RTCPeerConnection>();
 const remoteAudioElements = new Map<string, HTMLAudioElement>();
+const remoteAudioCleanups = new Map<string, () => void>();
 const pendingIceCandidates = new Map<string, RTCIceCandidateInit[]>();
 
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
+
+const SAFE_REMOTE_VOLUME = 0.35;
+const FALLBACK_REMOTE_VOLUME = 0.25;
 
 export function isVoiceChatSupported() {
   return !!window.RTCPeerConnection && !!navigator.mediaDevices?.getUserMedia;
@@ -81,10 +88,17 @@ export async function startVoiceChat(playerId: string, remotePlayerIds: string[]
 
   if (!localStream) {
     localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true
+      },
       video: false
     });
   }
+
+  getRemoteAudioContext();
+  await resumeRemoteAudioContext();
 
   isVoiceEnabled = true;
   emitVoiceStatus();
@@ -119,6 +133,8 @@ export function stopVoiceChat() {
 
   remoteAudioElements.forEach((audioElement) => audioElement.remove());
   remoteAudioElements.clear();
+  remoteAudioCleanups.forEach((cleanup) => cleanup());
+  remoteAudioCleanups.clear();
 
   localStream?.getTracks().forEach((track) => track.stop());
   localStream = null;
@@ -203,11 +219,12 @@ async function createPeerConnection(remotePlayerId: string, shouldOffer: boolean
     if (!audioElement) {
       audioElement = new Audio();
       audioElement.autoplay = true;
+      audioElement.volume = FALLBACK_REMOTE_VOLUME;
       remoteAudioElements.set(remotePlayerId, audioElement);
     }
 
     audioElement.srcObject = stream;
-    audioElement.play().catch((err) => {
+    playRemoteStreamSafely(remotePlayerId, stream, audioElement).catch((err) => {
       console.warn("远端语音播放被浏览器限制", err);
     });
   };
@@ -245,6 +262,63 @@ function closePeerConnection(remotePlayerId: string) {
   const audioElement = remoteAudioElements.get(remotePlayerId);
   audioElement?.remove();
   remoteAudioElements.delete(remotePlayerId);
+  remoteAudioCleanups.get(remotePlayerId)?.();
+  remoteAudioCleanups.delete(remotePlayerId);
+}
+
+async function playRemoteStreamSafely(
+  remotePlayerId: string,
+  stream: MediaStream,
+  audioElement: HTMLAudioElement
+) {
+  remoteAudioCleanups.get(remotePlayerId)?.();
+  remoteAudioCleanups.delete(remotePlayerId);
+
+  try {
+    const audioContext = getRemoteAudioContext();
+    await resumeRemoteAudioContext();
+
+    const source = audioContext.createMediaStreamSource(stream);
+    const limiter = audioContext.createDynamicsCompressor();
+    const gain = audioContext.createGain();
+
+    limiter.threshold.value = -24;
+    limiter.knee.value = 18;
+    limiter.ratio.value = 16;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.18;
+    gain.gain.value = SAFE_REMOTE_VOLUME;
+
+    source.connect(limiter);
+    limiter.connect(gain);
+    gain.connect(audioContext.destination);
+    audioElement.muted = true;
+    await audioElement.play().catch(() => undefined);
+
+    remoteAudioCleanups.set(remotePlayerId, () => {
+      source.disconnect();
+      limiter.disconnect();
+      gain.disconnect();
+    });
+    return;
+  } catch (err) {
+    console.warn("安全音频处理不可用，使用低音量播放", err);
+  }
+
+  audioElement.muted = false;
+  audioElement.volume = FALLBACK_REMOTE_VOLUME;
+  await audioElement.play();
+}
+
+function getRemoteAudioContext() {
+  remoteAudioContext ??= new AudioContext();
+  return remoteAudioContext;
+}
+
+async function resumeRemoteAudioContext() {
+  if (remoteAudioContext?.state === "suspended") {
+    await remoteAudioContext.resume();
+  }
 }
 
 async function flushPendingIceCandidates(remotePlayerId: string, peerConnection: RTCPeerConnection) {
