@@ -1,29 +1,32 @@
 import type { VoiceSignalMessage } from "../network/messages";
+import { getRuntimeConfig } from "../runtimeConfig";
 
 // 这个模块一旦被 import，就会立刻创建 WebSocket 连接。
 // 这里默认去连本机 3001 端口的服务端。
-const WS_URL =
-  import.meta.env.VITE_WS_URL ??
-  (location.protocol === "https:" ? `wss://${location.host}/ws` : `ws://${location.hostname}:3001`);
-export const socket = new WebSocket(WS_URL);
+const WS_URL = getWebSocketUrl();
+export const socket = WS_URL ? new WebSocket(WS_URL) : null;
 
-socket.onopen = () => {
-  console.log("connected to server");
-};
+if (socket) {
+  socket.onopen = () => {
+    console.log("connected to server");
+  };
 
-socket.onclose = () => {
-  console.log("disconnected from server");
-};
+  socket.onclose = () => {
+    console.log("disconnected from server");
+  };
 
-socket.onerror = (err) => {
-  console.error("ws error", err);
-};
+  socket.onerror = (err) => {
+    console.error("ws error", err);
+  };
+} else {
+  console.info("websocket server is not configured");
+}
 
 // 统一的发送函数：
 // 1. 避免每个场景都自己 JSON.stringify
 // 2. 在连接还没建立好时直接跳过，减少报错
 export function sendSocketMessage(payload: unknown) {
-  if (socket.readyState !== WebSocket.OPEN) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
     return;
   }
   socket.send(JSON.stringify(payload));
@@ -49,6 +52,31 @@ const RTC_CONFIG: RTCConfiguration = {
 
 const SAFE_REMOTE_VOLUME = 0.35;
 const FALLBACK_REMOTE_VOLUME = 0.25;
+
+function getWebSocketUrl() {
+  const runtimeUrl = getRuntimeConfig().wsUrl?.trim();
+  if (runtimeUrl) {
+    return runtimeUrl;
+  }
+
+  const buildUrl = import.meta.env.VITE_WS_URL?.trim();
+  if (buildUrl) {
+    return buildUrl;
+  }
+
+  if (location.protocol === "http:") {
+    return `ws://${location.hostname}:3001`;
+  }
+
+  const isLocalHost =
+    location.hostname === "localhost" ||
+    location.hostname === "127.0.0.1" ||
+    location.hostname.startsWith("192.168.") ||
+    location.hostname.startsWith("10.") ||
+    location.hostname.endsWith(".local");
+
+  return isLocalHost ? `wss://${location.host}/ws` : "";
+}
 
 export function isVoiceChatSupported() {
   return !!window.RTCPeerConnection && !!navigator.mediaDevices?.getUserMedia;

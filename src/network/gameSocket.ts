@@ -5,6 +5,11 @@ import { handleWebRTCMessage, socket } from "../service/network";
 // 这个函数负责把“收到服务器消息之后该做什么”交给场景自己定义。
 // 好处是：网络层不直接操作 Phaser 对象，职责更清楚。
 export function bindGameSocket(playerId: string, onMove: (msg: PlayerSyncMessage) => void) {
+  if (!socket) {
+    return () => undefined;
+  }
+
+  const activeSocket = socket;
   const handleMessage = (ev: MessageEvent<string>) => {
     const msg = parseSocketMessage(ev.data);
     if (!msg) {
@@ -33,9 +38,9 @@ export function bindGameSocket(playerId: string, onMove: (msg: PlayerSyncMessage
     onMove(msg);
   };
 
-  socket.addEventListener("message", handleMessage);
+  activeSocket.addEventListener("message", handleMessage);
 
   return () => {
-    socket.removeEventListener("message", handleMessage);
+    activeSocket.removeEventListener("message", handleMessage);
   };
 }

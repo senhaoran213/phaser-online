@@ -3,10 +3,13 @@
 // 2. 引入我们整理好的游戏配置
 // 3. 引入全局样式，让页面容器能正确显示游戏画布
 import Phaser from "phaser";
-import { GAME_HEIGHT, GAME_WIDTH, gameConfig } from "./config/gameConfig";
+import { loadRuntimeConfig } from "./runtimeConfig";
 import "./style.css";
 
 // 创建 Phaser.Game 之后，Phaser 会自动进入配置里的第一个场景。
+await loadRuntimeConfig();
+const { GAME_HEIGHT, GAME_WIDTH, gameConfig } = await import("./config/gameConfig");
+
 const game = new Phaser.Game(gameConfig);
 const mobileViewportQuery = window.matchMedia("(hover: none), (pointer: coarse), (max-width: 900px)");
 
