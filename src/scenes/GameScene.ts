@@ -11,7 +11,16 @@ import {
   worldHeight,
   worldWidth
 } from "../maps/emeraldMap";
-import { sendSocketMessage,startVoiceChat } from "../service/network";
+import {
+  isVoiceChatSupported,
+  onVoiceStatusChange,
+  sendSocketMessage,
+  startVoiceChat,
+  stopVoiceChat,
+  updateVoiceParticipants
+} from "../service/network";
+import type { Direction } from "../network/messages";
+import { normalizeDirection } from "../network/messages";
 import { createTerrainTileset } from "../render/createTerrainTileset";
 
 function createPlayerId() {
@@ -22,8 +31,6 @@ function createPlayerId() {
   const randomPart = Math.random().toString(36).slice(2);
   return `player-${Date.now().toString(36)}-${randomPart}`;
 }
-
-type DirectionKey = "up" | "down" | "left" | "right";
 
 const MOBILE_LAYOUT_STORAGE_KEY = "phaser-online-mobile-layout";
 
@@ -61,7 +68,7 @@ export class GameScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 
   /** 手机端虚拟方向键状态。 */
-  private touchInput: Record<DirectionKey, boolean> = {
+  private touchInput: Record<Direction, boolean> = {
     up: false,
     down: false,
     left: false,
@@ -105,13 +112,22 @@ export class GameScene extends Phaser.Scene {
    * 1. 没有按键时，依然知道角色刚才面朝哪个方向
    * 2. 发给服务器时，能告诉别人我最后朝向是什么
    */
-  private lastDirection = "down";
+  private lastDirection: Direction = "down";
 
   /** 上一次向服务器同步位置的时间戳，用来做发包节流。 */
   private lastSyncTime = 0;
 
   /** 背景音乐实例，避免重复播放。 */
   private backgroundMusic?: Phaser.Sound.BaseSound;
+
+  /** 页面级语音按钮，必须由用户点击触发麦克风授权。 */
+  private voiceButton?: HTMLButtonElement;
+
+  /** 取消语音状态监听，场景关闭时清理。 */
+  private unsubscribeVoiceStatus?: () => void;
+
+  /** 取消 WebSocket 监听，场景关闭时清理。 */
+  private unbindGameSocket?: () => void;
 
   constructor() {
     // key 是 Phaser 内部识别场景的名字。
@@ -165,11 +181,10 @@ export class GameScene extends Phaser.Scene {
     this.registerInput();
     // 手机端虚拟按键独立于 Phaser canvas，桌面端通过 CSS 隐藏。
     this.createMobileControls();
+    // 创建语音开关按钮，点击后再请求麦克风权限。
+    this.createVoiceControls();
     // Safari 需要用户交互后才能播放音频，姓名提交刚好提供了这个时机。
     this.playBackgroundMusic();
-
-    // 启动语音聊天功能（如果浏览器支持）未成功
-    // startVoiceChat();
 
     // 初始化完成后，告诉服务器“我加入了游戏”。
     // 这里顺便把出生点和当前方向一起发出去，方便别人立刻看到我。
@@ -181,6 +196,16 @@ export class GameScene extends Phaser.Scene {
       y: this.player.y,
       dir: this.lastDirection,
       moving: false
+    });
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.voiceButton?.remove();
+      this.voiceButton = undefined;
+      this.unsubscribeVoiceStatus?.();
+      this.unsubscribeVoiceStatus = undefined;
+      this.unbindGameSocket?.();
+      this.unbindGameSocket = undefined;
+      stopVoiceChat();
     });
   }
 
@@ -206,7 +231,7 @@ export class GameScene extends Phaser.Scene {
 
     // 默认沿用上一次方向。
     // 这样当玩家松开按键时，我们仍然知道“最后一次朝哪里移动过”。
-    let direction = this.lastDirection;
+    let direction: Direction = this.lastDirection;
 
     // 当前是传统宝可梦式四方向移动：
     // 使用 else-if 保证同一时刻只响应一个方向，不会出现斜着走。
@@ -417,9 +442,10 @@ export class GameScene extends Phaser.Scene {
    * 3. 根据方向播放相应动画
    */
   private bindRemotePlayers() {
-    bindGameSocket(this.playerId, (msg) => {
+    this.unbindGameSocket?.();
+    this.unbindGameSocket = bindGameSocket(this.playerId, (msg) => {
       // 先把服务器发来的方向字符串做一次兜底处理。
-      const direction = this.normalizeDirection(msg.dir);
+      const direction = normalizeDirection(msg.dir);
       let remote = this.remotePlayers.get(msg.playerId);
 
       if (!remote) {
@@ -428,8 +454,8 @@ export class GameScene extends Phaser.Scene {
         remote.setCollideWorldBounds(true);
 
         // 远程玩家也使用同样的碰撞箱，否则视觉和本地玩家会不一致。
-        remote.setSize(12, 10);
-        remote.setOffset(10, 21);
+        remote.setSize(12, 8);
+        remote.setOffset(2, 13);
 
         // 远程玩家也挂到同样的地图碰撞层上。
         // 这样别人移动到树或水附近时，本地画面也更一致。
@@ -439,6 +465,8 @@ export class GameScene extends Phaser.Scene {
 
         this.remotePlayers.set(msg.playerId, remote);
       }
+
+      updateVoiceParticipants([...this.remotePlayers.keys()]);
 
       // 当前联机同步方案比较简单：
       // 服务端广播“最终位置”，本地直接瞬移到那个位置。
@@ -522,7 +550,7 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private createControlButton(direction: DirectionKey, label: string) {
+  private createControlButton(direction: Direction, label: string) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `mobile-control-button mobile-control-${direction}`;
@@ -553,6 +581,52 @@ export class GameScene extends Phaser.Scene {
     button.textContent = label;
     button.setAttribute("aria-label", label);
     return button;
+  }
+
+  private createVoiceControls() {
+    this.voiceButton?.remove();
+    this.unsubscribeVoiceStatus?.();
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "voice-chat-button";
+
+    document.body.append(button);
+    this.voiceButton = button;
+
+    const setButtonState = (isEnabled: boolean) => {
+      button.textContent = isEnabled ? "语音开" : "语音关";
+      button.classList.toggle("voice-chat-button-active", isEnabled);
+      button.disabled = false;
+    };
+
+    if (!isVoiceChatSupported()) {
+      button.textContent = "不支持语音";
+      button.disabled = true;
+      return;
+    }
+
+    this.unsubscribeVoiceStatus = onVoiceStatusChange(setButtonState);
+
+    button.addEventListener("click", async () => {
+      if (button.classList.contains("voice-chat-button-active")) {
+        stopVoiceChat();
+        return;
+      }
+
+      button.disabled = true;
+      button.textContent = "开启中";
+
+      try {
+        const started = await startVoiceChat(this.playerId, [...this.remotePlayers.keys()]);
+        if (!started) {
+          setButtonState(false);
+        }
+      } catch (err) {
+        console.error("语音聊天启动失败", err);
+        setButtonState(false);
+      }
+    });
   }
 
   private toggleMobileSettingsPanel() {
@@ -721,19 +795,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * 把服务器传来的方向值限制在我们认识的范围内。
-   *
-   * 这样即使服务端哪天传了奇怪字符串，也不至于直接拼出不存在的动画名。
-   */
-  private normalizeDirection(dir: string) {
-    if (dir === "left" || dir === "right" || dir === "up" || dir === "down") {
-      return dir;
-    }
-
-    return "stand";
-  }
-
-  /**
    * 根据最后朝向选择静止动画。
    *
    * Aseprite 里当前静止帧命名是：
@@ -741,7 +802,7 @@ export class GameScene extends Phaser.Scene {
    * - back：朝上
    * - left/right：左右
    */
-  private getIdleAnimation(direction: string) {
+  private getIdleAnimation(direction: Direction) {
     if (direction === "up") {
       return "back";
     }
@@ -764,7 +825,7 @@ export class GameScene extends Phaser.Scene {
    * 2. 避免每一帧都发包
    * 3. 对简单 2D 联机演示已经足够
    */
-  private syncToServer(dir: string, isMoving: boolean) {
+  private syncToServer(dir: Direction, isMoving: boolean) {
     const now = Date.now();
 
     // 距离上次发送太近，就直接跳过。

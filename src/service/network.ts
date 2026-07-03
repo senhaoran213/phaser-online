@@ -1,148 +1,277 @@
+import type { VoiceSignalMessage } from "../network/messages";
+
 // 这个模块一旦被 import，就会立刻创建 WebSocket 连接。
 // 这里默认去连本机 3001 端口的服务端。
-const WS_URL = `ws://${location.hostname}:3001`
-export const socket = new WebSocket(WS_URL)
+const WS_URL = `ws://${location.hostname}:3001`;
+export const socket = new WebSocket(WS_URL);
 
 socket.onopen = () => {
-  console.log('connected to server')
-}
+  console.log("connected to server");
+};
 
 socket.onclose = () => {
-  console.log('disconnected from server')
-}
+  console.log("disconnected from server");
+};
 
 socket.onerror = (err) => {
-  console.error('ws error', err)
-}
+  console.error("ws error", err);
+};
 
 // 统一的发送函数：
 // 1. 避免每个场景都自己 JSON.stringify
 // 2. 在连接还没建立好时直接跳过，减少报错
 export function sendSocketMessage(payload: unknown) {
   if (socket.readyState !== WebSocket.OPEN) {
-    return
+    return;
   }
-  socket.send(JSON.stringify(payload))
+  socket.send(JSON.stringify(payload));
 }
 
-// ======================
-// 【新增】兼容 Safari 的语音聊天功能 //未成功
-// ======================
-let localStream: MediaStream | null = null
-let peerConnection: RTCPeerConnection | null = null
-const isVoiceSupported = !!window.RTCPeerConnection
+type VoiceStatusListener = (isEnabled: boolean) => void;
 
-// WebRTC 配置（兼容所有浏览器，包括 Safari）
-const RTC_CONFIG = {
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+let localPlayerId = "";
+let localStream: MediaStream | null = null;
+let isVoiceEnabled = false;
+let knownRemotePlayerIds: string[] = [];
+
+const voiceStatusListeners = new Set<VoiceStatusListener>();
+const peerConnections = new Map<string, RTCPeerConnection>();
+const remoteAudioElements = new Map<string, HTMLAudioElement>();
+const pendingIceCandidates = new Map<string, RTCIceCandidateInit[]>();
+
+const RTC_CONFIG: RTCConfiguration = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+};
+
+export function isVoiceChatSupported() {
+  return !!window.RTCPeerConnection && !!navigator.mediaDevices?.getUserMedia;
 }
 
-/**
- * 【必须用户点击调用】开启语音聊天
- * Safari 强制要求：必须由用户交互（click/touch）触发
- */
-export async function startVoiceChat() {
-  if (!isVoiceSupported) {
-    console.warn('当前浏览器不支持语音通话')
-    return
+export function onVoiceStatusChange(listener: VoiceStatusListener) {
+  voiceStatusListeners.add(listener);
+  listener(isVoiceEnabled);
+
+  return () => {
+    voiceStatusListeners.delete(listener);
+  };
+}
+
+export function updateVoiceParticipants(playerIds: string[]) {
+  knownRemotePlayerIds = [...new Set(playerIds.filter((playerId) => playerId !== localPlayerId))];
+
+  if (!isVoiceEnabled || !localPlayerId) {
+    return;
   }
 
-  try {
-    // 1. 获取麦克风权限
+  knownRemotePlayerIds.forEach((remotePlayerId) => {
+    if (shouldCreateOffer(localPlayerId, remotePlayerId)) {
+      void createPeerConnection(remotePlayerId, true);
+    }
+  });
+}
+
+export async function startVoiceChat(playerId: string, remotePlayerIds: string[] = []) {
+  if (!isVoiceChatSupported()) {
+    console.warn("当前浏览器不支持语音通话");
+    return false;
+  }
+
+  localPlayerId = playerId;
+  updateVoiceParticipants(remotePlayerIds);
+
+  if (!localStream) {
     localStream = await navigator.mediaDevices.getUserMedia({
       audio: true,
       video: false
-    })
-
-    // 2. 创建 WebRTC 连接
-    peerConnection = new RTCPeerConnection(RTC_CONFIG)
-
-    // 3. 添加本地音频轨道
-    localStream.getTracks().forEach(track => {
-      peerConnection!.addTrack(track, localStream!)
-    })
-
-    // 4. 监听远端音频（播放别人的声音）
-    peerConnection.ontrack = (e) => {
-      const audioEl = new Audio()
-      audioEl.srcObject = e.streams[0]
-      audioEl.play().catch(err => console.warn('音频自动播放被限制', err))
-    }
-
-    // 5. 发送 ICE 网络信息（必须，否则连不上）
-    peerConnection.onicecandidate = (e) => {
-      if (e.candidate) {
-        sendSocketMessage({
-          type: 'webrtc',
-          candidate: e.candidate
-        })
-      }
-    }
-
-    // 6. 创建并发送通话邀请
-    const offer = await peerConnection.createOffer()
-    await peerConnection.setLocalDescription(offer)
-    sendSocketMessage({
-      type: 'webrtc',
-      offer: offer
-    })
-
-    console.log('✅ 语音聊天已启动（麦克风已开启）')
-  } catch (err) {
-    console.error('❌ 语音启动失败：', err)
+    });
   }
+
+  isVoiceEnabled = true;
+  emitVoiceStatus();
+
+  sendSocketMessage({
+    type: "VOICE_SIGNAL",
+    playerId: localPlayerId,
+    enabled: true
+  } satisfies VoiceSignalMessage);
+
+  updateVoiceParticipants(remotePlayerIds);
+  console.log("语音聊天已开启");
+  return true;
 }
 
-/**
- * 关闭语音聊天
- */
 export function stopVoiceChat() {
-  // 关闭麦克风
-  if (localStream) {
-    localStream.getTracks().forEach(track => track.stop())
-    localStream = null
+  if (!localPlayerId && !localStream) {
+    return;
   }
 
-  // 关闭 WebRTC 连接
-  if (peerConnection) {
-    peerConnection.close()
-    peerConnection = null
+  if (localPlayerId) {
+    sendSocketMessage({
+      type: "VOICE_SIGNAL",
+      playerId: localPlayerId,
+      enabled: false
+    } satisfies VoiceSignalMessage);
   }
 
-  console.log('🛑 语音聊天已关闭')
+  peerConnections.forEach((peerConnection) => peerConnection.close());
+  peerConnections.clear();
+  pendingIceCandidates.clear();
+
+  remoteAudioElements.forEach((audioElement) => audioElement.remove());
+  remoteAudioElements.clear();
+
+  localStream?.getTracks().forEach((track) => track.stop());
+  localStream = null;
+  localPlayerId = "";
+  knownRemotePlayerIds = [];
+  isVoiceEnabled = false;
+  emitVoiceStatus();
+
+  console.log("语音聊天已关闭");
 }
 
-/**
- * 处理服务端发来的 WebRTC 信令（必须调用！）
- * 在你接收消息的地方调用 handleWebRTCMessage(data)
- */
-export function handleWebRTCMessage(data: any) {
-  if (!peerConnection || !data.type || data.type !== 'webrtc') return
-
-  try {
-    // 收到对方的邀请
-    if (data.offer) {
-      peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer))
-        .then(async () => {
-          const answer = await peerConnection!.createAnswer()
-          await peerConnection!.setLocalDescription(answer)
-          sendSocketMessage({
-            type: 'webrtc',
-            answer: answer
-          })
-        })
-    }
-
-    // 收到对方的应答
-    if (data.answer) {
-      peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer))
-    }
-
-    // 收到网络节点信息
-    if (data.candidate) {
-      peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate))
-    }
-  } catch (err) {
-    console.warn('WebRTC 信令处理失败', err)
+export async function handleWebRTCMessage(data: unknown) {
+  const message = data as Partial<VoiceSignalMessage>;
+  if (message.type !== "VOICE_SIGNAL" || !message.playerId || message.playerId === localPlayerId) {
+    return;
   }
+
+  if (message.targetPlayerId && message.targetPlayerId !== localPlayerId) {
+    return;
+  }
+
+  if (message.enabled === false) {
+    closePeerConnection(message.playerId);
+    return;
+  }
+
+  if (message.enabled === true) {
+    if (isVoiceEnabled && shouldCreateOffer(localPlayerId, message.playerId)) {
+      await createPeerConnection(message.playerId, true);
+    }
+    return;
+  }
+
+  if (!isVoiceEnabled || !localStream) {
+    return;
+  }
+
+  const peerConnection = await createPeerConnection(message.playerId, false);
+
+  if (message.description) {
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(message.description));
+    await flushPendingIceCandidates(message.playerId, peerConnection);
+
+    if (message.description.type === "offer") {
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      sendVoiceSignal(message.playerId, { description: answer });
+    }
+  }
+
+  if (message.candidate) {
+    if (peerConnection.remoteDescription) {
+      await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+    } else {
+      const candidates = pendingIceCandidates.get(message.playerId) ?? [];
+      candidates.push(message.candidate);
+      pendingIceCandidates.set(message.playerId, candidates);
+    }
+  }
+}
+
+async function createPeerConnection(remotePlayerId: string, shouldOffer: boolean) {
+  let peerConnection = peerConnections.get(remotePlayerId);
+  if (peerConnection) {
+    return peerConnection;
+  }
+
+  peerConnection = new RTCPeerConnection(RTC_CONFIG);
+  peerConnections.set(remotePlayerId, peerConnection);
+
+  localStream?.getTracks().forEach((track) => {
+    peerConnection!.addTrack(track, localStream!);
+  });
+
+  peerConnection.ontrack = (event) => {
+    const [stream] = event.streams;
+    if (!stream) {
+      return;
+    }
+
+    let audioElement = remoteAudioElements.get(remotePlayerId);
+    if (!audioElement) {
+      audioElement = new Audio();
+      audioElement.autoplay = true;
+      remoteAudioElements.set(remotePlayerId, audioElement);
+    }
+
+    audioElement.srcObject = stream;
+    audioElement.play().catch((err) => {
+      console.warn("远端语音播放被浏览器限制", err);
+    });
+  };
+
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      sendVoiceSignal(remotePlayerId, { candidate: event.candidate.toJSON() });
+    }
+  };
+
+  peerConnection.onconnectionstatechange = () => {
+    if (
+      peerConnection?.connectionState === "failed" ||
+      peerConnection?.connectionState === "closed" ||
+      peerConnection?.connectionState === "disconnected"
+    ) {
+      closePeerConnection(remotePlayerId);
+    }
+  };
+
+  if (shouldOffer) {
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    sendVoiceSignal(remotePlayerId, { description: offer });
+  }
+
+  return peerConnection;
+}
+
+function closePeerConnection(remotePlayerId: string) {
+  peerConnections.get(remotePlayerId)?.close();
+  peerConnections.delete(remotePlayerId);
+  pendingIceCandidates.delete(remotePlayerId);
+
+  const audioElement = remoteAudioElements.get(remotePlayerId);
+  audioElement?.remove();
+  remoteAudioElements.delete(remotePlayerId);
+}
+
+async function flushPendingIceCandidates(remotePlayerId: string, peerConnection: RTCPeerConnection) {
+  const candidates = pendingIceCandidates.get(remotePlayerId) ?? [];
+  pendingIceCandidates.delete(remotePlayerId);
+
+  for (const candidate of candidates) {
+    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+}
+
+function sendVoiceSignal(
+  targetPlayerId: string,
+  payload: Pick<VoiceSignalMessage, "description" | "candidate">
+) {
+  sendSocketMessage({
+    type: "VOICE_SIGNAL",
+    playerId: localPlayerId,
+    targetPlayerId,
+    ...payload
+  } satisfies VoiceSignalMessage);
+}
+
+function shouldCreateOffer(playerId: string, remotePlayerId: string) {
+  return !!playerId && playerId > remotePlayerId;
+}
+
+function emitVoiceStatus() {
+  voiceStatusListeners.forEach((listener) => listener(isVoiceEnabled));
 }
