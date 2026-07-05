@@ -124,8 +124,13 @@ export class GameScene extends Phaser.Scene {
   preload() {
     // 这里直接加载 Aseprite 导出的 png + json，
     // Phaser 会自动根据 json 里的信息生成动画帧。
-    this.load.aseprite("haruka", "/player/haruka/Sprite-0002.png", "/player/haruka/Sprite-0002.json");
-    this.load.audio("bgm", "/audio/%E3%83%9F%E3%82%B7%E3%83%AD%E3%82%BF%E3%82%A6%E3%83%B3%20.ogg");
+    const assetBaseUrl = import.meta.env.BASE_URL;
+    this.load.aseprite(
+      "haruka",
+      `${assetBaseUrl}player/haruka/Sprite-0002.png`,
+      `${assetBaseUrl}player/haruka/Sprite-0002.json`
+    );
+    this.load.audio("bgm", `${assetBaseUrl}audio/%E3%83%9F%E3%82%B7%E3%83%AD%E3%82%BF%E3%82%A6%E3%83%B3%20.ogg`);
   }
 
   /**
