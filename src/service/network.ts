@@ -112,7 +112,6 @@ export async function startVoiceChat(playerId: string, remotePlayerIds: string[]
   }
 
   localPlayerId = playerId;
-  updateVoiceParticipants(remotePlayerIds);
 
   if (!localStream) {
     localStream = await navigator.mediaDevices.getUserMedia({
