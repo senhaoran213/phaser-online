@@ -32,11 +32,14 @@ export function sendSocketMessage(payload: unknown) {
   socket.send(JSON.stringify(payload));
 }
 
-type VoiceStatusListener = (isEnabled: boolean) => void;
+export type VoiceStatus = "off" | "starting" | "waiting" | "connected" | "failed";
+
+type VoiceStatusListener = (status: VoiceStatus) => void;
 
 let localPlayerId = "";
 let localStream: MediaStream | null = null;
 let isVoiceEnabled = false;
+let voiceStatus: VoiceStatus = "off";
 let knownRemotePlayerIds: string[] = [];
 let remoteAudioContext: AudioContext | null = null;
 
@@ -81,7 +84,7 @@ export function isVoiceChatSupported() {
 
 export function onVoiceStatusChange(listener: VoiceStatusListener) {
   voiceStatusListeners.add(listener);
-  listener(isVoiceEnabled);
+  listener(voiceStatus);
 
   return () => {
     voiceStatusListeners.delete(listener);
@@ -109,6 +112,14 @@ export async function startVoiceChat(playerId: string, remotePlayerIds: string[]
   }
 
   localPlayerId = playerId;
+  setVoiceStatus("starting");
+
+  const isSocketReady = await waitForSocketOpen();
+  if (!isSocketReady) {
+    console.warn("[voice] 语音聊天启动失败：WebSocket 信令未连接");
+    setVoiceStatus("failed");
+    return false;
+  }
 
   if (!localStream) {
     localStream = await navigator.mediaDevices.getUserMedia({
@@ -128,7 +139,7 @@ export async function startVoiceChat(playerId: string, remotePlayerIds: string[]
   await resumeRemoteAudioContext();
 
   isVoiceEnabled = true;
-  emitVoiceStatus();
+  setVoiceStatus("waiting");
 
   sendSocketMessage({
     type: "VOICE_SIGNAL",
@@ -137,7 +148,7 @@ export async function startVoiceChat(playerId: string, remotePlayerIds: string[]
   } satisfies VoiceSignalMessage);
 
   updateVoiceParticipants(remotePlayerIds);
-  console.log("语音聊天已开启");
+  console.info("[voice] 本地语音已启动，等待 WebRTC 连接");
   return true;
 }
 
@@ -168,7 +179,7 @@ export function stopVoiceChat() {
   localPlayerId = "";
   knownRemotePlayerIds = [];
   isVoiceEnabled = false;
-  emitVoiceStatus();
+  setVoiceStatus("off");
 
   console.log("语音聊天已关闭");
 }
@@ -185,6 +196,9 @@ export async function handleWebRTCMessage(data: unknown) {
 
   if (message.enabled === false) {
     closePeerConnection(message.playerId);
+    if (isVoiceEnabled && !hasConnectedPeer()) {
+      setVoiceStatus("waiting");
+    }
     return;
   }
 
@@ -304,12 +318,21 @@ async function createPeerConnection(remotePlayerId: string, shouldOffer: boolean
       state: peerConnection?.connectionState
     });
 
+    if (peerConnection?.connectionState === "connected") {
+      setVoiceStatus("connected");
+      console.info("[voice] 语音聊天已连接", { remotePlayerId });
+      return;
+    }
+
     if (
       peerConnection?.connectionState === "failed" ||
       peerConnection?.connectionState === "closed" ||
       peerConnection?.connectionState === "disconnected"
     ) {
       closePeerConnection(remotePlayerId);
+      if (isVoiceEnabled && !hasConnectedPeer()) {
+        setVoiceStatus("failed");
+      }
     }
   };
 
@@ -333,6 +356,16 @@ function closePeerConnection(remotePlayerId: string) {
   remoteAudioElements.delete(remotePlayerId);
   remoteAudioCleanups.get(remotePlayerId)?.();
   remoteAudioCleanups.delete(remotePlayerId);
+}
+
+function hasConnectedPeer() {
+  for (const peerConnection of peerConnections.values()) {
+    if (peerConnection.connectionState === "connected") {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function playRemoteStreamSafely(
@@ -450,6 +483,53 @@ function shouldCreateOffer(playerId: string, remotePlayerId: string) {
   return !!playerId && playerId > remotePlayerId;
 }
 
-function emitVoiceStatus() {
-  voiceStatusListeners.forEach((listener) => listener(isVoiceEnabled));
+function setVoiceStatus(status: VoiceStatus) {
+  if (voiceStatus === status) {
+    return;
+  }
+
+  voiceStatus = status;
+  voiceStatusListeners.forEach((listener) => listener(voiceStatus));
+}
+
+function waitForSocketOpen(timeoutMs = 5000) {
+  if (!socket) {
+    return Promise.resolve(false);
+  }
+
+  if (socket.readyState === WebSocket.OPEN) {
+    return Promise.resolve(true);
+  }
+
+  if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise<boolean>((resolve) => {
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      resolve(false);
+    }, timeoutMs);
+
+    const handleOpen = () => {
+      cleanup();
+      resolve(true);
+    };
+
+    const handleClose = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      socket.removeEventListener("open", handleOpen);
+      socket.removeEventListener("close", handleClose);
+      socket.removeEventListener("error", handleClose);
+    };
+
+    socket.addEventListener("open", handleOpen);
+    socket.addEventListener("close", handleClose);
+    socket.addEventListener("error", handleClose);
+  });
 }

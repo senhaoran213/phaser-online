@@ -20,6 +20,7 @@ import {
   updateVoiceParticipants
 } from "../service/network";
 import type { Direction } from "../network/messages";
+import type { VoiceStatus } from "../service/network";
 import { normalizeDirection } from "../network/messages";
 import { createTerrainTileset } from "../render/createTerrainTileset";
 
@@ -563,10 +564,13 @@ export class GameScene extends Phaser.Scene {
     document.body.append(button);
     this.voiceButton = button;
 
-    const setButtonState = (isEnabled: boolean) => {
-      button.textContent = isEnabled ? "语音开" : "语音关";
-      button.classList.toggle("voice-chat-button-active", isEnabled);
-      button.disabled = false;
+    let currentVoiceStatus: VoiceStatus = "off";
+
+    const setButtonState = (status: VoiceStatus) => {
+      currentVoiceStatus = status;
+      button.textContent = this.getVoiceButtonText(status);
+      button.classList.toggle("voice-chat-button-active", status === "connected");
+      button.disabled = status === "starting";
     };
 
     if (!isVoiceChatSupported()) {
@@ -578,7 +582,11 @@ export class GameScene extends Phaser.Scene {
     this.unsubscribeVoiceStatus = onVoiceStatusChange(setButtonState);
 
     button.addEventListener("click", async () => {
-      if (button.classList.contains("voice-chat-button-active")) {
+      if (currentVoiceStatus === "starting") {
+        return;
+      }
+
+      if (currentVoiceStatus === "waiting" || currentVoiceStatus === "connected") {
         stopVoiceChat();
         return;
       }
@@ -589,13 +597,33 @@ export class GameScene extends Phaser.Scene {
       try {
         const started = await startVoiceChat(this.playerId, [...this.remotePlayers.keys()]);
         if (!started) {
-          setButtonState(false);
+          setButtonState("failed");
         }
       } catch (err) {
         console.error("语音聊天启动失败", err);
-        setButtonState(false);
+        setButtonState("failed");
       }
     });
+  }
+
+  private getVoiceButtonText(status: VoiceStatus) {
+    if (status === "starting") {
+      return "开启中";
+    }
+
+    if (status === "waiting") {
+      return "连接中";
+    }
+
+    if (status === "connected") {
+      return "语音开";
+    }
+
+    if (status === "failed") {
+      return "连接失败";
+    }
+
+    return "语音关";
   }
 
   /**
