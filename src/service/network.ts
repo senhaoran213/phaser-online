@@ -48,6 +48,7 @@ const pendingIceCandidates = new Map<string, RTCIceCandidateInit[]>();
 
 const SAFE_REMOTE_VOLUME = 0.35;
 const FALLBACK_REMOTE_VOLUME = 0.25;
+const PRODUCTION_WS_URL = "wss://phaser-obline-server.senhaoran213.workers.dev";
 
 function getWebSocketUrl() {
   const runtimeUrl = getRuntimeConfig().wsUrl?.trim();
@@ -71,7 +72,7 @@ function getWebSocketUrl() {
     location.hostname.startsWith("10.") ||
     location.hostname.endsWith(".local");
 
-  return isLocalHost ? `wss://${location.host}/ws` : "";
+  return isLocalHost ? `wss://${location.host}/ws` : PRODUCTION_WS_URL;
 }
 
 export function isVoiceChatSupported() {
