@@ -1,31 +1,28 @@
 import type { VoiceSignalMessage } from "../network/messages";
 import { getRuntimeConfig } from "../runtimeConfig";
 
-// 这个模块一旦被 import，就会立刻创建 WebSocket 连接。
-// 这里默认去连本机 3001 端口的服务端。
+const PRODUCTION_WS_URL = "wss://phaser-obline-server.senhaoran213.workers.dev";
 const WS_URL = getWebSocketUrl();
-export const socket = WS_URL ? new WebSocket(WS_URL) : null;
+export let socket: WebSocket | null = null;
 
-if (socket) {
-  socket.onopen = () => {
-    console.log("connected to server");
-  };
+export type SocketStatus = "unconfigured" | "connecting" | "open" | "closed";
 
-  socket.onclose = () => {
-    console.log("disconnected from server");
-  };
+type SocketStatusListener = (status: SocketStatus, activeSocket: WebSocket | null) => void;
 
-  socket.onerror = (err) => {
-    console.error("ws error", err);
-  };
-} else {
-  console.info("websocket server is not configured");
-}
+let socketStatus: SocketStatus = WS_URL ? "closed" : "unconfigured";
+let reconnectTimerId: number | null = null;
+let reconnectAttempt = 0;
+
+const socketStatusListeners = new Set<SocketStatusListener>();
+
+ensureSocketConnection();
 
 // 统一的发送函数：
 // 1. 避免每个场景都自己 JSON.stringify
 // 2. 在连接还没建立好时直接跳过，减少报错
 export function sendSocketMessage(payload: unknown) {
+  ensureSocketConnection();
+
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     return;
   }
@@ -51,7 +48,59 @@ const pendingIceCandidates = new Map<string, RTCIceCandidateInit[]>();
 
 const SAFE_REMOTE_VOLUME = 0.35;
 const FALLBACK_REMOTE_VOLUME = 0.25;
-const PRODUCTION_WS_URL = "wss://phaser-obline-server.senhaoran213.workers.dev";
+
+export function getSocketStatus() {
+  return socketStatus;
+}
+
+export function onSocketStatusChange(listener: SocketStatusListener) {
+  socketStatusListeners.add(listener);
+  listener(socketStatus, socket);
+
+  return () => {
+    socketStatusListeners.delete(listener);
+  };
+}
+
+export function ensureSocketConnection() {
+  if (!WS_URL) {
+    setSocketStatus("unconfigured");
+    return null;
+  }
+
+  if (
+    socket &&
+    (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN)
+  ) {
+    return socket;
+  }
+
+  if (reconnectTimerId !== null) {
+    window.clearTimeout(reconnectTimerId);
+    reconnectTimerId = null;
+  }
+
+  socket = new WebSocket(WS_URL);
+  setSocketStatus("connecting");
+
+  socket.addEventListener("open", () => {
+    reconnectAttempt = 0;
+    setSocketStatus("open");
+    console.log("connected to server");
+  });
+
+  socket.addEventListener("close", () => {
+    setSocketStatus("closed");
+    console.log("disconnected from server");
+    scheduleSocketReconnect();
+  });
+
+  socket.addEventListener("error", (err) => {
+    console.error("ws error", err);
+  });
+
+  return socket;
+}
 
 function getWebSocketUrl() {
   const runtimeUrl = getRuntimeConfig().wsUrl?.trim();
@@ -76,6 +125,29 @@ function getWebSocketUrl() {
     location.hostname.endsWith(".local");
 
   return isLocalHost ? `wss://${location.host}/ws` : PRODUCTION_WS_URL;
+}
+
+function scheduleSocketReconnect() {
+  if (!WS_URL || reconnectTimerId !== null) {
+    return;
+  }
+
+  const retryDelay = Math.min(1000 * 2 ** reconnectAttempt, 10000);
+  reconnectAttempt += 1;
+
+  reconnectTimerId = window.setTimeout(() => {
+    reconnectTimerId = null;
+    ensureSocketConnection();
+  }, retryDelay);
+}
+
+function setSocketStatus(status: SocketStatus) {
+  if (socketStatus === status) {
+    return;
+  }
+
+  socketStatus = status;
+  socketStatusListeners.forEach((listener) => listener(socketStatus, socket));
 }
 
 export function isVoiceChatSupported() {
@@ -493,15 +565,17 @@ function setVoiceStatus(status: VoiceStatus) {
 }
 
 function waitForSocketOpen(timeoutMs = 5000) {
-  if (!socket) {
+  const activeSocket = ensureSocketConnection();
+
+  if (!activeSocket) {
     return Promise.resolve(false);
   }
 
-  if (socket.readyState === WebSocket.OPEN) {
+  if (activeSocket.readyState === WebSocket.OPEN) {
     return Promise.resolve(true);
   }
 
-  if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
+  if (activeSocket.readyState === WebSocket.CLOSED || activeSocket.readyState === WebSocket.CLOSING) {
     return Promise.resolve(false);
   }
 
@@ -523,13 +597,13 @@ function waitForSocketOpen(timeoutMs = 5000) {
 
     const cleanup = () => {
       window.clearTimeout(timeoutId);
-      socket.removeEventListener("open", handleOpen);
-      socket.removeEventListener("close", handleClose);
-      socket.removeEventListener("error", handleClose);
+      activeSocket.removeEventListener("open", handleOpen);
+      activeSocket.removeEventListener("close", handleClose);
+      activeSocket.removeEventListener("error", handleClose);
     };
 
-    socket.addEventListener("open", handleOpen);
-    socket.addEventListener("close", handleClose);
-    socket.addEventListener("error", handleClose);
+    activeSocket.addEventListener("open", handleOpen);
+    activeSocket.addEventListener("close", handleClose);
+    activeSocket.addEventListener("error", handleClose);
   });
 }

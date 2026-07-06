@@ -13,6 +13,7 @@ import {
 } from "../maps/emeraldMap";
 import {
   isVoiceChatSupported,
+  onSocketStatusChange,
   onVoiceStatusChange,
   sendSocketMessage,
   startVoiceChat,
@@ -20,7 +21,7 @@ import {
   updateVoiceParticipants
 } from "../service/network";
 import type { Direction } from "../network/messages";
-import type { VoiceStatus } from "../service/network";
+import type { SocketStatus, VoiceStatus } from "../service/network";
 import { normalizeDirection } from "../network/messages";
 import { createTerrainTileset } from "../render/createTerrainTileset";
 
@@ -108,6 +109,9 @@ export class GameScene extends Phaser.Scene {
   /** 取消语音状态监听，场景关闭时清理。 */
   private unsubscribeVoiceStatus?: () => void;
 
+  /** 取消 WebSocket 状态监听，场景关闭时清理。 */
+  private unsubscribeSocketStatus?: () => void;
+
   /** 取消 WebSocket 监听，场景关闭时清理。 */
   private unbindGameSocket?: () => void;
 
@@ -172,23 +176,13 @@ export class GameScene extends Phaser.Scene {
     this.createVoiceControls();
     // 背景音乐先暂停自动播放，避免影响语音聊天测试。
 
-    // 初始化完成后，告诉服务器“我加入了游戏”。
-    // 这里顺便把出生点和当前方向一起发出去，方便别人立刻看到我。
-    sendSocketMessage({
-      type: "PLAYER_JOIN",
-      playerId: this.playerId,
-      name: this.playerName,
-      x: this.player.x,
-      y: this.player.y,
-      dir: this.lastDirection,
-      moving: false
-    });
-
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.voiceButton?.remove();
       this.voiceButton = undefined;
       this.unsubscribeVoiceStatus?.();
       this.unsubscribeVoiceStatus = undefined;
+      this.unsubscribeSocketStatus?.();
+      this.unsubscribeSocketStatus = undefined;
       this.unbindGameSocket?.();
       this.unbindGameSocket = undefined;
       stopVoiceChat();
@@ -556,6 +550,7 @@ export class GameScene extends Phaser.Scene {
   private createVoiceControls() {
     this.voiceButton?.remove();
     this.unsubscribeVoiceStatus?.();
+    this.unsubscribeSocketStatus?.();
 
     const button = document.createElement("button");
     button.type = "button";
@@ -565,24 +560,48 @@ export class GameScene extends Phaser.Scene {
     this.voiceButton = button;
 
     let currentVoiceStatus: VoiceStatus = "off";
+    let currentSocketStatus: SocketStatus = "closed";
 
-    const setButtonState = (status: VoiceStatus) => {
-      currentVoiceStatus = status;
-      button.textContent = this.getVoiceButtonText(status);
-      button.classList.toggle("voice-chat-button-active", status === "connected");
-      button.disabled = status === "starting";
+    const updateButtonState = () => {
+      const isSocketOpen = currentSocketStatus === "open";
+      const isVoiceUnavailable = !isVoiceChatSupported();
+
+      if (!isSocketOpen) {
+        button.textContent = "单机模式";
+        button.disabled = true;
+        button.classList.remove("voice-chat-button-active");
+        return;
+      }
+
+      if (isVoiceUnavailable) {
+        button.textContent = "不支持语音";
+        button.disabled = true;
+        button.classList.remove("voice-chat-button-active");
+        return;
+      }
+
+      button.textContent = this.getVoiceButtonText(currentVoiceStatus);
+      button.classList.toggle("voice-chat-button-active", currentVoiceStatus === "connected");
+      button.disabled = currentVoiceStatus === "starting";
     };
 
-    if (!isVoiceChatSupported()) {
-      button.textContent = "不支持语音";
-      button.disabled = true;
-      return;
-    }
+    this.unsubscribeSocketStatus = onSocketStatusChange((status) => {
+      const wasOffline = currentSocketStatus !== "open";
+      currentSocketStatus = status;
+      updateButtonState();
 
-    this.unsubscribeVoiceStatus = onVoiceStatusChange(setButtonState);
+      if (status === "open" && wasOffline) {
+        this.announcePlayerJoin();
+      }
+    });
+
+    this.unsubscribeVoiceStatus = onVoiceStatusChange((status) => {
+      currentVoiceStatus = status;
+      updateButtonState();
+    });
 
     button.addEventListener("click", async () => {
-      if (currentVoiceStatus === "starting") {
+      if (currentSocketStatus !== "open" || currentVoiceStatus === "starting") {
         return;
       }
 
@@ -597,11 +616,13 @@ export class GameScene extends Phaser.Scene {
       try {
         const started = await startVoiceChat(this.playerId, [...this.remotePlayers.keys()]);
         if (!started) {
-          setButtonState("failed");
+          currentVoiceStatus = "failed";
+          updateButtonState();
         }
       } catch (err) {
         console.error("语音聊天启动失败", err);
-        setButtonState("failed");
+        currentVoiceStatus = "failed";
+        updateButtonState();
       }
     });
   }
@@ -620,10 +641,26 @@ export class GameScene extends Phaser.Scene {
     }
 
     if (status === "failed") {
-      return "连接失败";
+      return "重试语音";
     }
 
-    return "语音关";
+    return "开启语音";
+  }
+
+  private announcePlayerJoin() {
+    if (!this.player) {
+      return;
+    }
+
+    sendSocketMessage({
+      type: "PLAYER_JOIN",
+      playerId: this.playerId,
+      name: this.playerName,
+      x: this.player.x,
+      y: this.player.y,
+      dir: this.lastDirection,
+      moving: false
+    });
   }
 
   /**

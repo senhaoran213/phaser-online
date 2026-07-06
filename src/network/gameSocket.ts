@@ -1,15 +1,12 @@
 import type { PlayerSyncMessage } from "./messages";
 import { parseSocketMessage } from "./messages";
-import { handleWebRTCMessage, socket } from "../service/network";
+import { handleWebRTCMessage, onSocketStatusChange } from "../service/network";
 
 // 这个函数负责把“收到服务器消息之后该做什么”交给场景自己定义。
 // 好处是：网络层不直接操作 Phaser 对象，职责更清楚。
 export function bindGameSocket(playerId: string, onMove: (msg: PlayerSyncMessage) => void) {
-  if (!socket) {
-    return () => undefined;
-  }
+  let activeSocket: WebSocket | null = null;
 
-  const activeSocket = socket;
   const handleMessage = (ev: MessageEvent<string>) => {
     const msg = parseSocketMessage(ev.data);
     if (!msg) {
@@ -38,9 +35,23 @@ export function bindGameSocket(playerId: string, onMove: (msg: PlayerSyncMessage
     onMove(msg);
   };
 
-  activeSocket.addEventListener("message", handleMessage);
+  const unbindSocket = () => {
+    activeSocket?.removeEventListener("message", handleMessage);
+    activeSocket = null;
+  };
+
+  const unsubscribeStatus = onSocketStatusChange((status, nextSocket) => {
+    if (status !== "open" || !nextSocket || nextSocket === activeSocket) {
+      return;
+    }
+
+    unbindSocket();
+    activeSocket = nextSocket;
+    activeSocket.addEventListener("message", handleMessage);
+  });
 
   return () => {
-    activeSocket.removeEventListener("message", handleMessage);
+    unsubscribeStatus();
+    unbindSocket();
   };
 }
