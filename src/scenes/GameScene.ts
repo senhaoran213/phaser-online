@@ -15,6 +15,7 @@ import {
   isVoiceChatSupported,
   onSocketStatusChange,
   onVoiceStatusChange,
+  retrySocketConnection,
   sendSocketMessage,
   startVoiceChat,
   stopVoiceChat,
@@ -639,8 +640,8 @@ export class GameScene extends Phaser.Scene {
       const isVoiceUnavailable = !isVoiceChatSupported();
 
       if (!isSocketOpen) {
-        button.textContent = "单机模式";
-        button.disabled = true;
+        button.textContent = currentSocketStatus === "connecting" ? "连接中" : "单机模式";
+        button.disabled = currentSocketStatus === "connecting";
         button.classList.remove("voice-chat-button-active");
         return;
       }
@@ -673,7 +674,12 @@ export class GameScene extends Phaser.Scene {
     });
 
     button.addEventListener("click", async () => {
-      if (currentSocketStatus !== "open" || currentVoiceStatus === "starting") {
+      if (currentSocketStatus !== "open") {
+        retrySocketConnection();
+        return;
+      }
+
+      if (currentVoiceStatus === "starting") {
         return;
       }
 

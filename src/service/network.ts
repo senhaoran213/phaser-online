@@ -102,6 +102,24 @@ export function ensureSocketConnection() {
   return socket;
 }
 
+export function retrySocketConnection() {
+  if (!WS_URL) {
+    setSocketStatus("unconfigured");
+    return null;
+  }
+
+  if (reconnectTimerId !== null) {
+    window.clearTimeout(reconnectTimerId);
+    reconnectTimerId = null;
+  }
+
+  if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
+    return socket;
+  }
+
+  return ensureSocketConnection();
+}
+
 function getWebSocketUrl() {
   const runtimeUrl = getRuntimeConfig().wsUrl?.trim();
   if (runtimeUrl) {
