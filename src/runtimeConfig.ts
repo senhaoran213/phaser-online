@@ -1,5 +1,6 @@
 export type RuntimeConfig = {
   wsUrl?: string;
+  iceServers?: RTCIceServer[];
 };
 
 declare global {

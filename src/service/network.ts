@@ -46,10 +46,6 @@ const remoteAudioElements = new Map<string, HTMLAudioElement>();
 const remoteAudioCleanups = new Map<string, () => void>();
 const pendingIceCandidates = new Map<string, RTCIceCandidateInit[]>();
 
-const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-};
-
 const SAFE_REMOTE_VOLUME = 0.35;
 const FALLBACK_REMOTE_VOLUME = 0.25;
 
@@ -122,6 +118,9 @@ export async function startVoiceChat(playerId: string, remotePlayerIds: string[]
       },
       video: false
     });
+    console.info("[voice] local microphone stream ready", {
+      audioTracks: localStream.getAudioTracks().length
+    });
   }
 
   getRemoteAudioContext();
@@ -189,6 +188,7 @@ export async function handleWebRTCMessage(data: unknown) {
   }
 
   if (message.enabled === true) {
+    console.info("[voice] remote voice enabled", { remotePlayerId: message.playerId });
     if (isVoiceEnabled && shouldCreateOffer(localPlayerId, message.playerId)) {
       await createPeerConnection(message.playerId, true);
     }
@@ -202,18 +202,27 @@ export async function handleWebRTCMessage(data: unknown) {
   const peerConnection = await createPeerConnection(message.playerId, false);
 
   if (message.description) {
+    console.info("[voice] received remote description", {
+      remotePlayerId: message.playerId,
+      type: message.description.type
+    });
     await peerConnection.setRemoteDescription(new RTCSessionDescription(message.description));
     await flushPendingIceCandidates(message.playerId, peerConnection);
 
     if (message.description.type === "offer") {
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
+      console.info("[voice] sent answer", { remotePlayerId: message.playerId });
       sendVoiceSignal(message.playerId, { description: answer });
     }
   }
 
   if (message.candidate) {
     if (peerConnection.remoteDescription) {
+      console.info("[voice] received ICE candidate", {
+        remotePlayerId: message.playerId,
+        candidateType: message.candidate.candidate?.match(/ typ ([a-z]+)/)?.[1]
+      });
       await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
     } else {
       const candidates = pendingIceCandidates.get(message.playerId) ?? [];
@@ -229,8 +238,9 @@ async function createPeerConnection(remotePlayerId: string, shouldOffer: boolean
     return peerConnection;
   }
 
-  peerConnection = new RTCPeerConnection(RTC_CONFIG);
+  peerConnection = new RTCPeerConnection(getRtcConfig());
   peerConnections.set(remotePlayerId, peerConnection);
+  console.info("[voice] peer connection created", { remotePlayerId, shouldOffer });
 
   localStream?.getTracks().forEach((track) => {
     peerConnection!.addTrack(track, localStream!);
@@ -241,12 +251,19 @@ async function createPeerConnection(remotePlayerId: string, shouldOffer: boolean
     if (!stream) {
       return;
     }
+    console.info("[voice] remote audio track received", {
+      remotePlayerId,
+      audioTracks: stream.getAudioTracks().length
+    });
 
     let audioElement = remoteAudioElements.get(remotePlayerId);
     if (!audioElement) {
       audioElement = new Audio();
       audioElement.autoplay = true;
+      audioElement.setAttribute("playsinline", "true");
       audioElement.volume = FALLBACK_REMOTE_VOLUME;
+      audioElement.style.display = "none";
+      document.body.append(audioElement);
       remoteAudioElements.set(remotePlayerId, audioElement);
     }
 
@@ -258,11 +275,34 @@ async function createPeerConnection(remotePlayerId: string, shouldOffer: boolean
 
   peerConnection.onicecandidate = (event) => {
     if (event.candidate) {
+      console.info("[voice] sent ICE candidate", {
+        remotePlayerId,
+        candidateType: event.candidate.candidate.match(/ typ ([a-z]+)/)?.[1]
+      });
       sendVoiceSignal(remotePlayerId, { candidate: event.candidate.toJSON() });
     }
   };
 
+  peerConnection.oniceconnectionstatechange = () => {
+    console.info("[voice] ICE connection state", {
+      remotePlayerId,
+      state: peerConnection?.iceConnectionState
+    });
+  };
+
+  peerConnection.onicegatheringstatechange = () => {
+    console.info("[voice] ICE gathering state", {
+      remotePlayerId,
+      state: peerConnection?.iceGatheringState
+    });
+  };
+
   peerConnection.onconnectionstatechange = () => {
+    console.info("[voice] peer connection state", {
+      remotePlayerId,
+      state: peerConnection?.connectionState
+    });
+
     if (
       peerConnection?.connectionState === "failed" ||
       peerConnection?.connectionState === "closed" ||
@@ -275,6 +315,7 @@ async function createPeerConnection(remotePlayerId: string, shouldOffer: boolean
   if (shouldOffer) {
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
+    console.info("[voice] sent offer", { remotePlayerId });
     sendVoiceSignal(remotePlayerId, { description: offer });
   }
 
@@ -353,7 +394,42 @@ async function flushPendingIceCandidates(remotePlayerId: string, peerConnection:
   pendingIceCandidates.delete(remotePlayerId);
 
   for (const candidate of candidates) {
+    console.info("[voice] flushed pending ICE candidate", {
+      remotePlayerId,
+      candidateType: candidate.candidate?.match(/ typ ([a-z]+)/)?.[1]
+    });
     await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+  }
+}
+
+function getRtcConfig(): RTCConfiguration {
+  const configuredIceServers = getRuntimeConfig().iceServers;
+  if (configuredIceServers?.length) {
+    return { iceServers: configuredIceServers };
+  }
+
+  const buildIceServers = parseBuildIceServers();
+  if (buildIceServers?.length) {
+    return { iceServers: buildIceServers };
+  }
+
+  return {
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  };
+}
+
+function parseBuildIceServers() {
+  const value = import.meta.env.VITE_ICE_SERVERS?.trim();
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as RTCIceServer[];
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (err) {
+    console.warn("[voice] VITE_ICE_SERVERS is not valid JSON", err);
+    return null;
   }
 }
 
