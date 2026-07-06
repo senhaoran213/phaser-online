@@ -4,7 +4,11 @@ import { handleWebRTCMessage, onSocketStatusChange } from "../service/network";
 
 // 这个函数负责把“收到服务器消息之后该做什么”交给场景自己定义。
 // 好处是：网络层不直接操作 Phaser 对象，职责更清楚。
-export function bindGameSocket(playerId: string, onMove: (msg: PlayerSyncMessage) => void) {
+export function bindGameSocket(
+  playerId: string,
+  onMove: (msg: PlayerSyncMessage) => void,
+  onWorldSync?: (remotePlayerIds: string[]) => void
+) {
   let activeSocket: WebSocket | null = null;
 
   const handleMessage = (ev: MessageEvent<string>) => {
@@ -14,11 +18,16 @@ export function bindGameSocket(playerId: string, onMove: (msg: PlayerSyncMessage
     }
 
     if (msg.type === "WORLD_SYNC") {
+      const remotePlayerIds: string[] = [];
+
       msg.players.forEach((player) => {
         if (player.playerId !== playerId) {
+          remotePlayerIds.push(player.playerId);
           onMove({ type: "PLAYER_JOIN", ...player });
         }
       });
+
+      onWorldSync?.(remotePlayerIds);
       return;
     }
 

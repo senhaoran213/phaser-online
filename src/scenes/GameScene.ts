@@ -34,6 +34,15 @@ function createPlayerId() {
   return `player-${Date.now().toString(36)}-${randomPart}`;
 }
 
+const REMOTE_PLAYER_TIMEOUT_MS = 10_000;
+const REMOTE_PLAYER_CLEANUP_INTERVAL_MS = 1_000;
+
+type RemotePlayerState = {
+  sprite: Phaser.Physics.Arcade.Sprite;
+  colliders: Phaser.Physics.Arcade.Collider[];
+  lastSeenAt: number;
+};
+
 /**
  * GameScene 是当前项目的核心场景。
  *
@@ -82,8 +91,11 @@ export class GameScene extends Phaser.Scene {
    */
   private collisionLayers: Phaser.Tilemaps.TilemapLayer[] = [];
 
-  /** 远程玩家表：key 是玩家 ID，value 是对应的 Phaser 精灵。 */
-  private remotePlayers = new Map<string, Phaser.Physics.Arcade.Sprite>();
+  /** 远程玩家表：key 是玩家 ID，value 是精灵、碰撞器和最后活跃时间。 */
+  private remotePlayers = new Map<string, RemotePlayerState>();
+
+  /** 定时清理长时间没有收到同步消息的远程玩家。 */
+  private remotePlayerCleanupTimerId?: number;
 
   /** 每次刷新页面会生成新的本地玩家 ID，用来和其他玩家区分。 */
   private playerId = createPlayerId();
@@ -185,6 +197,8 @@ export class GameScene extends Phaser.Scene {
       this.unsubscribeSocketStatus = undefined;
       this.unbindGameSocket?.();
       this.unbindGameSocket = undefined;
+      this.stopRemotePlayerCleanup();
+      this.removeAllRemotePlayers();
       stopVoiceChat();
     });
   }
@@ -423,6 +437,7 @@ export class GameScene extends Phaser.Scene {
    */
   private bindRemotePlayers() {
     this.unbindGameSocket?.();
+    this.startRemotePlayerCleanup();
     this.unbindGameSocket = bindGameSocket(this.playerId, (msg) => {
       // 先把服务器发来的方向字符串做一次兜底处理。
       const direction = normalizeDirection(msg.dir);
@@ -430,29 +445,86 @@ export class GameScene extends Phaser.Scene {
 
       if (!remote) {
         // 第一次收到这个玩家的消息，说明需要在本地生成他的角色。
-        remote = this.physics.add.sprite(msg.x ?? PLAYER_SPAWN.x, msg.y ?? PLAYER_SPAWN.y, "haruka");
-        remote.setCollideWorldBounds(true);
+        const sprite = this.physics.add.sprite(msg.x ?? PLAYER_SPAWN.x, msg.y ?? PLAYER_SPAWN.y, "haruka");
+        sprite.setCollideWorldBounds(true);
 
         // 远程玩家也使用同样的碰撞箱，否则视觉和本地玩家会不一致。
-        remote.setSize(12, 8);
-        remote.setOffset(2, 13);
+        sprite.setSize(12, 8);
+        sprite.setOffset(2, 13);
 
         // 远程玩家也挂到同样的地图碰撞层上。
         // 这样别人移动到树或水附近时，本地画面也更一致。
-        this.collisionLayers.forEach((layer) => {
-          this.physics.add.collider(remote!, layer);
-        });
+        const colliders = this.collisionLayers.map((layer) => this.physics.add.collider(sprite, layer));
 
+        remote = {
+          sprite,
+          colliders,
+          lastSeenAt: Date.now()
+        };
         this.remotePlayers.set(msg.playerId, remote);
       }
 
+      remote.lastSeenAt = Date.now();
       updateVoiceParticipants([...this.remotePlayers.keys()]);
 
       // 当前联机同步方案比较简单：
       // 服务端广播“最终位置”，本地直接瞬移到那个位置。
       // 后面如果想更丝滑，可以改成 tween 或插值。
-      remote.setPosition(msg.x, msg.y);
-      remote.play(msg.moving ? `walk_${direction}` : this.getIdleAnimation(direction), true);
+      remote.sprite.setPosition(msg.x, msg.y);
+      remote.sprite.play(msg.moving ? `walk_${direction}` : this.getIdleAnimation(direction), true);
+    }, (remotePlayerIds) => {
+      const activeRemotePlayerIds = new Set(remotePlayerIds);
+
+      this.remotePlayers.forEach((_remote, remotePlayerId) => {
+        if (!activeRemotePlayerIds.has(remotePlayerId)) {
+          this.removeRemotePlayer(remotePlayerId);
+        }
+      });
+    });
+  }
+
+  private startRemotePlayerCleanup() {
+    this.stopRemotePlayerCleanup();
+
+    this.remotePlayerCleanupTimerId = window.setInterval(() => {
+      this.removeStaleRemotePlayers();
+    }, REMOTE_PLAYER_CLEANUP_INTERVAL_MS);
+  }
+
+  private stopRemotePlayerCleanup() {
+    if (this.remotePlayerCleanupTimerId === undefined) {
+      return;
+    }
+
+    window.clearInterval(this.remotePlayerCleanupTimerId);
+    this.remotePlayerCleanupTimerId = undefined;
+  }
+
+  private removeStaleRemotePlayers() {
+    const now = Date.now();
+
+    this.remotePlayers.forEach((remote, remotePlayerId) => {
+      if (now - remote.lastSeenAt >= REMOTE_PLAYER_TIMEOUT_MS) {
+        this.removeRemotePlayer(remotePlayerId);
+      }
+    });
+  }
+
+  private removeRemotePlayer(playerId: string) {
+    const remote = this.remotePlayers.get(playerId);
+    if (!remote) {
+      return;
+    }
+
+    remote.colliders.forEach((collider) => collider.destroy());
+    remote.sprite.destroy();
+    this.remotePlayers.delete(playerId);
+    updateVoiceParticipants([...this.remotePlayers.keys()]);
+  }
+
+  private removeAllRemotePlayers() {
+    [...this.remotePlayers.keys()].forEach((playerId) => {
+      this.removeRemotePlayer(playerId);
     });
   }
 
